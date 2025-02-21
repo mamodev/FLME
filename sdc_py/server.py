@@ -21,6 +21,49 @@ SECRET_KEY = "some_secret_key"
 # The fl_model python module should contain the following attributes:
 # - Model : nn.Module
 
+class ModelRegistry:
+    def __init__(self):
+        self.models = {}
+        self.split_models = {}
+
+    def split(self, clusterID, intoClusterID, one, two):
+        if clusterID not in self.models:
+            raise Exception(f"Cluster {clusterID} not found")
+        
+        if intoClusterID  in self.models:
+            raise Exception(f"Cluster {intoClusterID} already exists")
+        
+        self.models[clusterID]["split"] = intoClusterID
+        self.models[clusterID][self.models[clusterID]["latest"]+1] = one
+        
+        self.models[intoClusterID] = { "latest": 1 }
+        self.models[intoClusterID][1] = two
+
+
+    def put(self, clusterID, version, model):
+        if clusterID not in self.models:
+            self.models[clusterID] = {}
+            self.models[clusterID]["latest"] = version
+            self.models[clusterID]["split"] = None
+
+        if version > self.models[clusterID]["latest"]:
+            self.models[clusterID]["latest"] = version
+
+        self.models[clusterID][version] = model
+    
+    def get(self, clusterID, version):
+        if clusterID not in self.models:
+            return None
+        
+        if version == 0:
+            version = self.models[clusterID]["latest"]
+        
+        if version not in self.models[clusterID]:
+            return None
+        
+        return self.models[clusterID][version], version
+
+
 class TCPServerWorker:
     def __init__(self, id=None, host='127.0.0.1', port=8888, update_queue=None, gmodel_update_queue=None):
         assert update_queue is not None, "update_queue must be provided"
@@ -32,8 +75,8 @@ class TCPServerWorker:
         self.gmodel_update_queue = gmodel_update_queue
         self.host = host
         self.port = port
-        self.global_models = {}
-        self.latest_global_model_version = None
+
+        self.registry = ModelRegistry()
 
     async def handle_packet(self, writer: asyncio.StreamWriter, packet_id: int, payload: bytes, auth: Dict):
         assert auth != None, "auth must be provided"
@@ -44,18 +87,14 @@ class TCPServerWorker:
                 writer.write(protocol.create_response_packet(400, str(e).encode()))
                 return
 
-            if packet.model_version == 0:
-                    packet.model_version = self.latest_global_model_version
-            elif not packet.model_version in self.global_models:
+            model, version = self.registry.get(auth['cluster'], packet.model_version)
+            if model is None:
                 writer.write(protocol.create_response_packet(404, b"Model not found"))
                 return
 
-
-            model_data = protocol.ModelData(self.global_models[packet.model_version])
-            buff = struct.pack("!I", packet.model_version)
-            buff += model_data.to_buffer()
-
-            writer.write(protocol.create_response_packet(0, buff))
+            res = protocol.GetModelPacketResponse(version, protocol.ModelData(model))
+            writer.write(protocol.create_response_packet(0, res.to_buffer()))
+            return
 
         elif packet_id == protocol.PutModelPacketID:
             try:
@@ -64,7 +103,7 @@ class TCPServerWorker:
                 writer.write(protocol.create_response_packet(400, str(e).encode()))
                 return
     
-            upd = (self.id, auth['key'], packet.meta, packet.data.to_buffer())
+            upd = (self.id, auth['cluster'], auth['key'], packet.meta, packet.data.to_buffer())
 
             writer.write(protocol.create_response_packet(0, b"OK"))
             self.update_queue.put(upd)
@@ -73,62 +112,58 @@ class TCPServerWorker:
         else:
             writer.write(protocol.create_response_packet(404, b"Unknown packet"))
 
-    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        addr = writer.get_extra_info('peername')
-        print(f"[{self.id}] Connection from {addr}")
+    async def handle_auth(self, writer: asyncio.StreamWriter, token_buff: bytes): 
+        try:
+            auth = jwt.decode(token_buff, SECRET_KEY, algorithms=["HS256"])
+            if "key" not in auth:
+                raise jwt.InvalidTokenError("Token must contain a 'key' field")
+            
+            if "cluster" not in auth or type(auth["cluster"]) != int:   
+                raise jwt.InvalidTokenError("Token must contain a 'cluster' field of type int")
+            
+            writer.write(protocol.create_response_packet(0, b"OK"))
+            return auth
+        except jwt.ExpiredSignatureError:
+            writer.write(protocol.create_response_packet(401, b"Token expired"))
+        except jwt.InvalidTokenError as e:
+            writer.write(protocol.create_response_packet(401, str(e).encode()))
+        return None
 
+    async def read_packet(self, reader: asyncio.StreamReader) -> bool:
+        packet_id_data = await reader.readexactly(2)   
+        packet_id = struct.unpack("!H", packet_id_data)[0]
+        packet_len_data = await reader.readexactly(4)
+        packet_len = struct.unpack("!I", packet_len_data)[0]
+        payload_data = await reader.readexactly(packet_len)
+        return (packet_id, payload_data)
+    
+
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         auth = None
         should_wait_close = True
         try:
             while True:
-                # Read PacketID (1 byte)
-                packet_id_data = await reader.readexactly(2)
-                packet_id = struct.unpack("!H", packet_id_data)[0]
-                if(packet_id == 0):
-                    print(f"Connection closed by {addr} with EOF")
-                    break
-
-                # Read PacketLen (4 bytes)
-                packet_len_data = await reader.readexactly(4)
-                packet_len = struct.unpack("!I", packet_len_data)[0]
-
-                # Read Payload
-                payload_data = await reader.readexactly(packet_len)
-                # print(f"Received Packet from {addr}: ID={packet_id}, Length={packet_len}, payload_len={len(payload_data)}")
+                packet_id, payload_data = await self.read_packet(reader)
 
                 if not auth and packet_id != protocol.AuthPacketID:
                     writer.write(protocol.create_response_packet(401, "Unauthorized"))
                 elif packet_id == protocol.AuthPacketID:
-                    try:
-                        auth = jwt.decode(payload_data, SECRET_KEY, algorithms=["HS256"])
-                        if "key" not in auth:
-                            raise jwt.InvalidTokenError("Invalid token")
-
-                        print(f"Authenticated: {auth}")
-                        writer.write(protocol.create_response_packet(0, b"OK"))
-                    except jwt.ExpiredSignatureError:
-                        writer.write(protocol.create_response_packet(401, b"Token expired"))
-                    except jwt.InvalidTokenError:
-                        writer.write(protocol.create_response_packet(401, b"Invalid token"))
+                    auth = await self.handle_auth(writer, payload_data)
                 else:
                     await self.handle_packet(writer, packet_id, payload_data, auth)
                 
                 await writer.drain()
 
         except asyncio.IncompleteReadError:
-            print(f"Connection from {addr} closed unexpectedly")
+            # print(f"Connection from {addr} closed unexpectedly")
+            pass
         except ConnectionResetError:
-            print(f"Connection from {addr} reset by peer")
+            # print(f"Connection from {addr} reset by peer")
             should_wait_close = False
         finally:
             writer.close()
             if should_wait_close:
                 await writer.wait_closed()
-
-
-
-        print(f"Connection from {addr} finally closed")
-
 
     async def poll_get(self, queue: SimpleQueue, interval: float = 0.1):
         while True:
@@ -140,11 +175,16 @@ class TCPServerWorker:
     async def gather_new_global_model(self):
         while True:
             try:
-                id, model = await self.poll_get(self.gmodel_update_queue)
+                # clusterID, id, model = await self.poll_get(self.gmodel_update_queue)
+                update_type, data = await self.poll_get(self.gmodel_update_queue)
+                if update_type == "model":
+                    clusterID, id, model = data
+                    self.registry.put(clusterID, id, model)
 
-                # print(f"{self.id}: Received new global model {id}")
-                self.global_models[id] = model
-                self.latest_global_model_version = id
+                elif update_type == "split":
+                    clusterID, intoClusterID, one, two = data
+                    self.registry.split(clusterID, intoClusterID, one, two)
+
             except asyncio.CancelledError:
                 print(f"gather_new_global_model cancelled, exiting loop")
                 return
@@ -187,7 +227,7 @@ class TCPServer:
 
         initial_model = self.Net().state_dict()
         for q in gmodel_queues:
-            q.put((1, initial_model))
+            q.put(("model", (1, 1, initial_model)))
 
         def start_worker(id, h, p, uq, gmq):
             worker = TCPServerWorker(host=h,
@@ -206,41 +246,36 @@ class TCPServer:
             p.start()
             self.childs.append(p)
 
+        import aggregator
+
+        def on_new_model(clusterID, version, model):
+            for q in gmodel_queues:
+                q.put(("model", (clusterID, version, model)))
+        
+        aggregators = [ aggregator.Aggregator(initial_model, on_new_model, 1)]
+
         try:
-            # cerate a state dict of zeros tensors
-            current_model_update = {k: torch.zeros_like(v) for k, v in initial_model.items()}
-            current_model_version = 0
-            current_accumulated_updates = 0
-            current_accumulated_updates_weight = 0
-
             while True:
-                wid, client_key, meta, state_buffer = upd_queue.get()
+                wid, cluster_id, client_key, meta, state_buffer = upd_queue.get()
 
-                model = protocol.ModelData.from_buffer(state_buffer).model_state
+                assert cluster_id <= len(aggregators), f"Cluster ID {cluster_id} not found"
+                agg= aggregators[cluster_id - 1]
 
-                w = meta.train_samples
-                current_accumulated_updates += 1
-                current_accumulated_updates_weight += w
-
-                for k, v in model.items():
-                    current_model_update[k] += w * v
-
-                if current_accumulated_updates >= 3:
-                    current_model_version += 1
-                    print(f"Updating global model to version {current_model_version}")
-
-                    for k in current_model_update:
-                        current_model_update[k] /= current_accumulated_updates_weight
+                split = agg.put(wid, client_key, meta, state_buffer)
+                if split:
+                    one, two = split
+                    agg.gmodel = one
+                    new_agg = aggregator.Aggregator(two, on_new_model, len(aggregators) + 1)
+                    aggregators.append(new_agg)
+                    print(f"Splitting cluster {cluster_id} into ({cluster_id}, {len(aggregators)})")
 
                     for q in gmodel_queues:
-                        q.put((current_model_version, current_model_update))
-
-                    current_model_update = {k: torch.zeros_like(v) for k, v in initial_model.items()}
-                    current_accumulated_updates = 0
-                    current_accumulated_updates_weight = 0
+                        q.put(("split", (cluster_id, len(aggregators), one, two)))
 
         except KeyboardInterrupt:
             print("Parent process interrupted.")
+        except Exception as e:
+            print(f"Parent process exception: {e}")
         finally:
             for q in gmodel_queues:
                 q.close()

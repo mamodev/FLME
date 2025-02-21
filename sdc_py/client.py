@@ -107,7 +107,7 @@ while True:
         exit(1)
 
     MODEL_VERSION = struct.unpack('!I', payload[:4])[0]
-    model_data = protocol.ModelData.from_buffer(payload[4:])
+    model_data, _ = protocol.ModelData.from_buffer(payload[4:])
     print(f"Model version: {MODEL_VERSION}, bytes: {len(payload)}")
 
     net.load_state_dict(model_data.model_state)

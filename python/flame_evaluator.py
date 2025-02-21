@@ -73,31 +73,35 @@ def __plot_model_diff(models_dicts, from_model_dict, gids):
     print(f"Flattening time: {time.time() - start_time}")
     start_time = time.time()
 
-    layers_variance = []
-    for i in range(len(flat_models[0])):
-        layer = []
-        for j in range(len(flat_models)):
-            layer.append(flat_models[j][i])
+    # layers_variance = []
+    # for i in range(len(flat_models[0])):
+    #     layer = []
+    #     for j in range(len(flat_models)):
+    #         layer.append(flat_models[j][i])
 
-        layers_variance.append(layer)
+    #     layers_variance.append(layer)
 
 
 
-    layers_variance = [np.var(layer, axis=0) for layer in layers_variance]
-    layers_variance = [np.mean(layer) for layer in layers_variance]
-    max_variance_layer = np.argsort(layers_variance, axis=0)[-3:]
+    # layers_variance = [np.var(layer, axis=0) for layer in layers_variance]
+    # layers_variance = [np.mean(layer) for layer in layers_variance]
+    # max_variance_layer = np.argsort(layers_variance, axis=0)[-3:]
 
-    conc_model_layers = lambda model: np.concatenate([model[l] for l in max_variance_layer], axis=0)
-    PCA_vecs = [conc_model_layers(m) for m in flat_models] + [conc_model_layers(ref_flat)]
+    # conc_model_layers = lambda model: np.concatenate([model[l] for l in max_variance_layer], axis=0)
+    # PCA_vecs = [conc_model_layers(m) for m in flat_models] + [conc_model_layers(ref_flat)]
 
     ref_flat = np.concatenate(ref_flat)
     flat_models = [np.concatenate(flat_model) for flat_model in flat_models]
+    flat_models = [flat_model - ref_flat for flat_model in flat_models]
+    ref_flat = np.zeros_like(ref_flat)
 
     print(f"Variance time: {time.time() - start_time}")
     start_time = time.time()
 
     cluster_pca = PCA(n_components=3)
     cluster_pca = cluster_pca.fit_transform(flat_models)
+
+    
     # cluster_pca = flat_models
     # clusterer = sk_cluster.DBSCAN(eps=0.5, min_samples=3)
     # clusterer = sk_cluster.HDBSCAN(min_cluster_size=3)
@@ -113,9 +117,9 @@ def __plot_model_diff(models_dicts, from_model_dict, gids):
 
     pca = PCA(n_components=3)
     try:
-        parameters_3d = pca.fit_transform(PCA_vecs)
+        parameters_3d = pca.fit_transform(flat_models + [ref_flat])
     except:
-        parameters_3d = np.zeros((len(PCA_vecs), 3))
+        parameters_3d = np.zeros((len(flat_models) + 1, 3))
 
 
     print(f"PCA time: {time.time() - start_time}")

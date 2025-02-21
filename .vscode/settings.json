@@ -84,7 +84,9 @@
         "typeindex": "cpp",
         "typeinfo": "cpp",
         "valarray": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "csetjmp": "cpp"
     },
-    "cmake.sourceDirectory": "/home/mamo/projects/FLME/seastar/tests/perf"
+    "cmake.sourceDirectory": "/home/mamo/projects/FLME/seastar/tests/perf",
+    "github.copilot.editor.enableAutoCompletions": true
 }

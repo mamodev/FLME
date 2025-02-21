@@ -73,7 +73,9 @@ class VecClassifier(nn.Module):
         return self.fc(x)
     
 class CuboidDataset(torch.utils.data.Dataset):
-    def __init__(self, lable_data, dex="Data", color='blue'):
+    def __init__(self, lable_data, dex="Data", color='blue', gid=None, pid=None):
+        self.gid = gid
+        self.pid = pid
         self.color = color  
         self.lables = 8
         assert len(lable_data) == 8, f"Provide a file for each label: provided {len(lable_data)} files"
@@ -179,7 +181,7 @@ class CuboidDataset(torch.utils.data.Dataset):
 
         ds = []
         for i in range(partitioning_start - 1, partitioning_end):
-            ds.append(CuboidDataset(vecs[i], dex=f"{sub_folder} g{g} p{i}"))
+            ds.append(CuboidDataset(vecs[i], dex=f"{sub_folder} g{g} p{i}", gid=g, pid=i))  
 
         return ds
         

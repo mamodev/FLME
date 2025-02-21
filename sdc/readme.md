@@ -1,0 +1,1 @@
+https://github.com/USCiLab/cereal/archive/refs/tags/v1.3.2.zip
