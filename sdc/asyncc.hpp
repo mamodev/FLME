@@ -45,7 +45,6 @@ public:
     }
 
     void set(std::coroutine_handle<> handle) {
-
         if (value.has_value()) {
             handle.resume();
         } else {
@@ -54,17 +53,25 @@ public:
     }
 
     T get() {
+        if (!value.has_value()) {
+            throw std::runtime_error("Getting future value in invalid state, this should never happen");
+        }
+
         return value.value();
     }
 };
 
+
+
+thread_local uint64_t FutID = 0;
 template <typename T>
 struct Future {
     std::variant<
         T,
-        FutureHandler<T>*,
-        std::monostate
+        FutureHandler<T>*
     > value;
+
+    std::string name = "Future-" + std::to_string(FutID++);
 
     template <typename U>
     Future(U&& value) : value(std::forward<U>(value)) {
@@ -78,7 +85,17 @@ struct Future {
         } else if (std::holds_alternative<FutureHandler<T>*>(value)) {
             return std::get<FutureHandler<T>*>(value)->is_ready();
         } else {
-            return false;
+            throw std::runtime_error("Future::is_ready, variant is in invalid state, this should never happen");
+        }
+    }
+
+    std::string getType() {
+        if (std::holds_alternative<T>(value)) {
+            return "T";
+        } else if (std::holds_alternative<FutureHandler<T>*>(value)) {
+            return "FutureHandler<T>*";
+        } else {
+            return "Unknown";
         }
     }
 
@@ -94,12 +111,13 @@ struct Future {
     }
 
     bool await_ready() {
-        // std::cout << "Future::await_ready" << std::endl;
+        // std::cout << "Future::await_ready id: " << name << std::endl;
         return is_ready();
     }
 
     void await_suspend(std::coroutine_handle<> handle) {
-        // std::cout << "Future::await_suspend" << std::endl;
+        // std::cout << "Future::await_suspend id: " << name << std::endl;
+
         if (std::holds_alternative<T>(value)) {
             handle.resume();
         } else if (std::holds_alternative<FutureHandler<T>*>(value)) {
@@ -107,10 +125,15 @@ struct Future {
         } else {
             throw std::runtime_error("Awaiting future in invalid state, this should never happen");
         }
+
+
     }
 
     T await_resume() {
-        // std::cout << "Future::await_resume" << std::endl;
+        // std::cout << "Future::await_resume: " << name <<  " type: " << getType() << std::endl;
+        if (!is_ready()) {
+            throw std::runtime_error("Resuming from future " + name + " in invalid state, this should never happen, T: " + getType());
+        }
         return get();
     }
 };
@@ -332,6 +355,8 @@ struct [[nodiscard]] Task {
         }
 
         Task get_return_object() {
+            this->value = std::nullopt;
+            this->continuation = std::nullopt;
             // std::cout << "task<T>::promise_type::get_return_object" << std::endl;
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
@@ -344,7 +369,10 @@ struct [[nodiscard]] Task {
 
     bool await_ready() {
         // std::cout << "task<T>::await_ready" << std::endl;
-        return handle.promise().value.has_value();
+        auto &p = handle.promise();
+        auto &v = p.value;
+        auto has_value = v.has_value();
+        return has_value;
     }
 
     void await_suspend(std::coroutine_handle<> h) {
@@ -359,7 +387,7 @@ struct [[nodiscard]] Task {
     T await_resume() {
         // std::cout << "task<T>::await_resume" << std::endl;
         if (!handle.promise().value.has_value()) {
-            throw std::runtime_error("Awaiting task in invalid state, this should never happen");
+            throw std::runtime_error("Resuming task in invalid state, this should never happen");
         }
 
         return handle.promise().value.value();
@@ -426,7 +454,7 @@ struct [[nodiscard]] Task<void> {
 
     void await_resume() {
         if (!handle.promise().done) {
-            throw std::runtime_error("Awaiting task in invalid state, this should never happen");
+            throw std::runtime_error("Resuming task in invalid state, this should never happen");
         }
 
         return;
@@ -517,7 +545,6 @@ struct io_uring_buf_ring *setup_buffer_ring(struct io_uring *ring, uint16_t BGID
 class EventLoop {
     std::vector<std::coroutine_handle<>> yelded_coroutines;
     struct io_uring ring;
-    volatile bool running = true;
 
     uint64_t pending_io_requests = 0;
 
@@ -539,6 +566,8 @@ class EventLoop {
     bool initialized = false;
 
 public:
+    volatile bool running = true;
+
     EventLoop() {}
     Res<void> init(unsigned entries) {
         int ret = io_uring_queue_init(entries, &ring, 0);
@@ -639,6 +668,7 @@ public:
             }
 
             if (ACTIVE_FIBERS == 0 && pending_io_requests == 0) {
+                std::cout << "No active fibers and no pending io requests, exiting" << std::endl;
                 running = false;
                 break;
             }
@@ -663,10 +693,16 @@ thread_local EventLoop loop = EventLoop();
 Future<Res<int>> open_file(const char* path, int flags, int mode) {
     auto req = propagate(loop.new_request(IORequestType::OPEN));
     auto sqe = propagate(loop.get_sqe());
+    #ifdef IORING_OP_OPEN
     io_uring_prep_open(sqe, path, flags, mode);
+    #else
+    io_uring_prep_openat(sqe, AT_FDCWD, path, flags, mode);
+    #endif
+    
     io_uring_sqe_set_data(sqe, (void*)req);
     loop.lazy_submit();
     return req->get_handler();
+
 }
 
 Future<Res<int>> read_file(int fd, void* buf, size_t count) {
@@ -739,6 +775,7 @@ Future<Res<int>> accept_socket(int sockfd, struct sockaddr *addr, unsigned *addr
     io_uring_prep_accept(sqe, sockfd, addr, addrlen, 0);
     io_uring_sqe_set_data(sqe, (void*)req);
     loop.lazy_submit();
+
     return req->get_handler();
 }
 
@@ -748,25 +785,41 @@ Future<Res<int>> accept_socket_direct(int sockfd, struct sockaddr *addr, unsigne
     io_uring_prep_accept_direct(sqe, sockfd, addr, addrlen, 0, IORING_FILE_INDEX_ALLOC);
     io_uring_sqe_set_data(sqe, (void*)req);
     loop.lazy_submit();
+
     return req->get_handler();
 }
 
 Future<Res<int>> bind_socket(int sockfd, struct sockaddr *addr, unsigned addrlen) {
+    #ifdef IORING_OP_BIND
     auto req = propagate(loop.new_request(IORequestType::SOCK_BIND));
     auto sqe = propagate(loop.get_sqe());
     io_uring_prep_bind(sqe, sockfd, addr, addrlen);
     io_uring_sqe_set_data(sqe, (void*)req);
     loop.lazy_submit();
     return req->get_handler();
+    #else
+    if(bind(sockfd, addr, addrlen) < 0) {
+        return Error("error binding socket, ERRNO: " + errno);
+    }    
+    return 0;
+    #endif
 }
 
 Future<Res<int>> listen_socket(int sockfd, int backlog) {
+    #ifdef IORING_OP_LISTEN
     auto req = propagate(loop.new_request(IORequestType::SOCK_LISTEN));
     auto sqe = propagate(loop.get_sqe());
     io_uring_prep_listen(sqe, sockfd, backlog);
     io_uring_sqe_set_data(sqe, (void*)req);
     loop.lazy_submit();
     return req->get_handler();
+    #else
+    if(listen(sockfd, backlog) < 0) {
+        return Error("error listening socket, ERRNO: " + errno);
+    }
+
+    return 0;
+    #endif
 }
 
 Future<Res<int>> recv_socket(int sockfd, void *buf, size_t len, int flags) {
@@ -1016,6 +1069,8 @@ dummy_defer_scope __defer__scope__;
 
 #define await_defer __defer__scope__.sync_defer();
 
+#define co_return_void co_return std::nullopt;
+
 // #define ret_after_defer \
 //         if (__defer__scope__.deferred) { \
 //             co_return; \
@@ -1072,3 +1127,75 @@ Task<int> defer_tests () {
 
     co_return 0;
 }
+
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+Task<Res<int>> server_socket(int port) {
+    int fd = try_await(open_socket(AF_INET, SOCK_STREAM, 0, 0));
+    defer_err_async
+    {
+        co_await close_file(fd);
+    };
+
+    int opt = 1;
+    sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(int)) < 0)
+        co_return Error("Error setting socket options SO_REUSEADDR");
+
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(int)) < 0)
+        co_return Error("Error setting socket options SO_REUSEPORT");
+
+    try_await(bind_socket(fd, (sockaddr *)&addr, sizeof(addr)));
+    try_await(listen_socket(fd, 10));
+
+
+    co_return fd;
+}
+
+
+
+struct WaitGroup {
+    uint32_t count = 0;
+    std::vector<FutureHandler<int>*> futures;
+    
+    void add(int n) {
+        count += n;
+    }
+
+    void done() {
+        if (count == 0) {
+            return;
+        }
+
+        count--;
+
+        if (count == 0) {
+            std::vector<FutureHandler<int>*> newFutures;
+            std::swap(futures, newFutures);
+
+
+            std::cout << "Done called, resuming " << newFutures.size() << " futures" << std::endl;
+
+            for (auto &f : newFutures) {
+                f->set(newFutures.size());
+            }
+        }
+    }
+
+    Future<int> wait() {
+        if (count == 0) {
+            return Future<int>(0);
+        }
+
+        FutureHandler<int> *handler = new FutureHandler<int>();
+        futures.push_back(handler);
+        return Future<int>(handler);
+    }
+};
