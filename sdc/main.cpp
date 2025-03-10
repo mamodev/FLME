@@ -10,6 +10,10 @@ class RaftNode {
     uint16_t id;
 public:
 
+    uint16_t getID() {
+        return id;
+    }
+
     int getPort() {
         return port;
     }
@@ -64,27 +68,59 @@ public:
     }
 };
 
+#include <random>
+
+
+#define REQUEST_VOTE_PACKET 0
+struct RequestVotePacket {
+    uint32_t packet_size = sizeof(RequestVotePacket);
+    uint32_t packet_type = REQUEST_VOTE_PACKET;
+    uint64_t term;
+    int candidateId;
+    uint64_t lastLogIndex;
+    uint64_t lastLogTerm;
+};
+
+struct RequestVoteResponsePacket {
+    uint64_t term;
+    bool voteGranted;
+};
+
+
 enum class RaftRole {
     Follower = 0,
     Candidate = 1,
     Leader = 2
 };
 struct RaftState {
-    int currentTerm = 0;
+    uint64_t currentTerm = 0;
     int votedFor = -1;
-    std::vector<int> log;
+    std::vector<uint64_t> log;
+    RaftRole role = RaftRole::Follower;
 };
 class RaftServer {
 private:
+    std::mt19937 random_gen;
+    std::uniform_int_distribution<int> election_timeout_dist;
+    std::optional<TimeoutCancelToken> election_timeout;
+
+
     int server_fd;
     int port;
     std::vector<RaftNode> peers;
     RaftState state;
+    int id;
 
 public:
-    RaftServer(int port, std::vector<RaftNode> peers) {
+    RaftServer(int id, int port, std::vector<RaftNode> peers) {
+        this->id = id;
         this->peers = peers;
         this->port = port;
+        this->state = RaftState();
+
+        this->election_timeout = std::nullopt;
+        this->random_gen = std::mt19937(std::random_device()());
+        this->election_timeout_dist = std::uniform_int_distribution<int>(150, 300);
     }
 
     Fiber client_handler(int fd) {
@@ -110,11 +146,33 @@ public:
             uint32_t packetType = *(uint32_t*)(buffer + 4);
         
             switch (packetType) {
-                case 0: {
-                    try_await(send_socket_direct(fd, buffer, bytes, 0));
-                    break;
+                case REQUEST_VOTE_PACKET: {
+                    if (packetLen != sizeof(RequestVotePacket)) {
+                        std::cerr << "Malformed packet received (len != sizeof(RequestVotePacket))" << std::endl;
+                        co_return;
+                    }
+        
+                    RequestVotePacket* packet = (RequestVotePacket*)buffer;
+                    RequestVoteResponsePacket response = {
+                        .term = state.currentTerm,
+                        .voteGranted = false
+                    };
+        
+                    if (packet->term < state.currentTerm) {
+                        response.voteGranted = false;
+                    } else if (state.votedFor == -1 || state.votedFor == packet->candidateId) {
+                        response.voteGranted = true;
+                        state.votedFor = packet->candidateId;
+                    }
+
+                    std::cout << "[ RaftNode " << port << "] Voted for " << packet->candidateId << " in term " << packet->term << " with voteGranted = " << response.voteGranted << std::endl;
+        
+                    co_await send_socket_direct(fd, (uint8_t*)&response, sizeof(response), 0);
+                    co_return;
+                   
                 }
                 default: {
+                    
                     std::cerr << "Unknown packet type received" << std::endl;
                     break;
                 }
@@ -122,8 +180,55 @@ public:
         }
     }
 
+    Res<void> setElectionTimeout() {
+        if (election_timeout.has_value()) {
+            return Error("Election timeout already set, THIS IS AN INVALID STATE and should never happen");
+        }
+        
+        int timeout = election_timeout_dist(random_gen);
+        setTimeout(timeout, [this]() -> Fiber {
+            std::cout << "[RaftNode " << port << "] Election timeout triggered" << std::endl;
+            election_timeout = std::nullopt;
+
+            // start election
+            this->state.currentTerm++;
+            this->state.votedFor = this->id;
+            this->state.role = RaftRole::Candidate;
+
+            RequestVotePacket packet = {
+                .term = this->state.currentTerm,
+                .candidateId = this->id,
+                .lastLogIndex = this->state.log.size(),
+                .lastLogTerm = this->state.log.size() > 0 ? this->state.log.back() : 0
+            };
+
+            std::vector<std::shared_ptr<Task<Res<int>>>> tasks;
+
+            for (auto& peer : peers) {
+                // Use std::shared_ptr to manage the lifetime of the task
+                tasks.push_back(std::make_shared<Task<Res<int>>>(peer.send_message_with_retry((uint8_t*)&packet, sizeof(packet))));
+            }
+            
+
+            for (auto& task : tasks) {
+                co_await *task;
+            }
+
+            co_return;
+        });
+        
+        return std::nullopt;
+    }
+
+
     Task<Res<uint8_t>> run() {
         server_fd = try_await(server_socket(port));
+        defer_async {
+            co_await close_file(server_fd);
+        };
+
+        setElectionTimeout();
+ 
 
         std::cout << "[RaftNode " << port << "] Server started on port " << port << std::endl;
         while(loop.running) {
@@ -136,8 +241,8 @@ public:
  
 };
 
-Fiber _main(int port, std::vector<RaftNode> peers) {
-    RaftServer server(port, peers);
+Fiber _main(int id, int port, std::vector<RaftNode> peers) {
+    RaftServer server(id, port, peers);
     try_await(server.run());
     co_return;
 }
@@ -159,10 +264,10 @@ int main() {
             }
         }
 
-        _main(node.getPort(), peers);
+        _main(node.getID(), node.getPort(), peers);
         
     }
-    
+
     std::cout << "Starting event loop" << std::endl;
     loop.loop();
     return 0;

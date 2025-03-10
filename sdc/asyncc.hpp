@@ -20,14 +20,30 @@
 // To solve this we Always return Promise<T> as copy, but inside the Promise has an union of T and a Ptr to T
 // Or better a Ptr to FutureHandler<T> so that the handler can be allocated manually and keeped for async resolution
 
+
+// Memory management of Futures:
+// 1. If the Future is resolved synchronously, the value is stored in the Future itself so it use the move/copy constructor to pass value T;
+// 2. If the Future is resolved asynchronously, the value is stored in a FutureHandler<T> that is allocated somewhere else and the Future has a pointer to it
+//    so the FutureHandler<T> is not copied or moved, just the pointer is copied
+//    for this reason the FutureHandler<T> Must in some way deallocated.
+
+
 template <typename T>
 struct FutureHandler {
 private:
     std::optional<T> value;
     std::optional<std::coroutine_handle<>> handle;
 
+    void (*deallocator)(void*);
+    void* deallocator_data;
+
 public:
-    FutureHandler() : value(std::nullopt), handle(std::nullopt) {}
+    FutureHandler() : value(std::nullopt), handle(std::nullopt), deallocator(nullptr), deallocator_data(nullptr) {}
+
+    void set_deallocator(void (*deallocator)(void*), void* data) {
+        this->deallocator = deallocator;
+        this->deallocator_data = data;
+    }
 
     bool is_ready() {
         return value.has_value();
@@ -57,7 +73,14 @@ public:
             throw std::runtime_error("Getting future value in invalid state, this should never happen");
         }
 
-        return value.value();
+        T v = value.value();
+        value = std::nullopt;
+
+        if (deallocator != nullptr) {
+            deallocator(deallocator_data);
+        }
+
+        return v;
     }
 };
 
@@ -71,12 +94,11 @@ struct Future {
         FutureHandler<T>*
     > value;
 
-    std::string name = "Future-" + std::to_string(FutID++);
-
     template <typename U>
     Future(U&& value) : value(std::forward<U>(value)) {
-        // std::cout << "Future::Future ptr? " << std::is_pointer_v<U> << std::endl;
     }
+    
+    std::string name = "Future-" + std::to_string(FutID++);
 
     bool is_ready() {
         // std::cout << "Future::is_ready" << std::endl;
@@ -195,6 +217,8 @@ struct Error {
     Error(const std::string& msg) : message(msg) {}
 };
 
+#define ERR_OUT_OF_MEMORY Error("Out of memory")
+
 template <typename T = void>
 struct Res {
     std::variant<T, Error> value;
@@ -278,6 +302,18 @@ T unwrap_or_excep(Res<T> res) {
     } \
     _r.getValue(); \
 })
+
+
+// WARNING: propagate in a coroutine will not trigger defer_error statements,
+// if you need this behavioe use unwrap_or_excep
+#define co_propagate(res) ({ \
+    auto _r = res; \
+    if (!_r.is_ok()) { \
+        co_return _r.getError(); \
+    } \
+    _r.getValue(); \
+})
+
 
 #define try_await(x) unwrap_or_excep(co_await x)
 
@@ -541,6 +577,10 @@ struct io_uring_buf_ring *setup_buffer_ring(struct io_uring *ring, uint16_t BGID
 	return br;
 }
 
+template <typename T>
+void delete_ptr(void* ptr) {
+    delete static_cast<T*>(ptr);
+}
 
 class EventLoop {
     std::vector<std::coroutine_handle<>> yelded_coroutines;
@@ -554,6 +594,7 @@ class EventLoop {
     struct IORequest {
         IORequestType type;
         FutureHandler<Res<int>> handler;
+        bool canceled = false;
 
         constexpr inline FutureHandler<Res<int>>* get_handler() {
             return &handler;
@@ -611,6 +652,7 @@ public:
             return Error("error creating new request, ERRNO: " + errno);
         }
 
+        req->handler.set_deallocator(delete_ptr<IORequest>, req);
         req->type = type;
         return req;
     }
@@ -653,6 +695,10 @@ public:
                         failed = res != -ETIME;
                     }
 
+                    if (data->canceled) {
+                        continue;
+                    }
+                    
                     // std::cout << "Request resolved with: " << res << std::endl;
 
                     if(failed) {
@@ -689,6 +735,8 @@ public:
 };
 
 thread_local EventLoop loop = EventLoop();
+
+
 
 Future<Res<int>> open_file(const char* path, int flags, int mode) {
     auto req = propagate(loop.new_request(IORequestType::OPEN));
@@ -872,6 +920,79 @@ Future<Res<int>> waitMS(int ms) {
     ts.tv_nsec = (ms % 1000) * 1000000;
     return timeout(&ts, 1000000, 0);
 }
+
+#include <memory>
+using TimeoutCancelToken = std::shared_ptr<bool>;
+
+template <typename Callback, typename = std::enable_if_t<std::is_invocable_r_v<void, Callback> || std::is_invocable_r_v<Fiber, Callback>>>
+Fiber __setTimeout_Fiber(Future<Res<int>> fut, Callback cb, TimeoutCancelToken ctoken) {
+    auto res = co_await fut;
+    if (res.is_ok() && !*ctoken) {
+        cb();
+        *ctoken = true;
+    }
+
+    co_return;
+}
+
+// template <typename Callback, typename = std::enable_if_t<std::is_invocable_r_v<void, Callback> || std::is_invocable_r_v<Fiber, Callback>>>
+template<typename Callback>
+Res<TimeoutCancelToken> setTimeout( int ms, Callback &&cb) {
+    __kernel_timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000;
+
+    auto req = propagate(loop.new_request(IORequestType::TIMEOUT));
+    auto sqe = propagate(loop.get_sqe());
+   
+    io_uring_prep_timeout(sqe, &ts, 1000000, 0);
+    io_uring_sqe_set_data(sqe, (void*)req);
+    loop.lazy_submit();
+
+  
+    FutureHandler<Res<int>>* handler = req->get_handler();
+
+    //TODO make it no throw
+    TimeoutCancelToken cancel = std::make_shared<bool>(false);
+    __setTimeout_Fiber(Future<Res<int>>(handler), std::forward<Callback>(cb), cancel);
+
+    return cancel;
+}
+
+bool clearTimeout(TimeoutCancelToken token) {
+    if(token) {
+        if (!*token) {
+            *token = true;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// EXAMPLE OF TIMEOUT USAGE
+// Fiber c(TimeoutCancelToken cancel) {
+//     try_await(waitMS(1000));
+
+//     bool celared = clearTimeout(cancel);
+//     if (celared) {
+//         std::cout << "Timeout cleared" << std::endl;
+//     } else {
+//         std::cout << "Timeout not cleared" << std::endl;
+//     }
+
+//     co_return;
+// }
+
+// Fiber p() {
+//     auto cancel = unwrap_or_excep(setTimeout(500, []() {
+//         std::cout << "Timeout Expired" << std::endl;
+//     }));
+
+//     c(cancel);
+//     co_return;
+// }
+
 
 // Task<Res<void>> recv_all(int sockfd, void *buf, size_t len, int flags) {
 //     size_t total = 0;
@@ -1195,6 +1316,8 @@ struct WaitGroup {
         }
 
         FutureHandler<int> *handler = new FutureHandler<int>();
+        handler->set_deallocator(delete_ptr<FutureHandler<int>>, handler);
+        
         futures.push_back(handler);
         return Future<int>(handler);
     }
