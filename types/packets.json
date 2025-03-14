@@ -1,0 +1,26 @@
+[
+  {
+    "name": "AuthPacket",
+    "fields": [
+      { "name": "id", "type": "uint32" },
+      { "name": "token", "type": "string(32)" }
+    ]
+  },
+  {
+    "name": "PushModel",
+    "fields": [
+      {
+        "name": "version",
+        "type": "uint32"
+      },
+      {
+        "name": "model",
+        "type": "uint32"
+      },
+      {
+        "name": "data",
+        "type": "uint32"
+      }
+    ]
+  }
+]
