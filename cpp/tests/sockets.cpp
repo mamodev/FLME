@@ -1,5 +1,3 @@
-#define DEBUG
-
 #include <core.hpp>
 #include <cstring>  
 
@@ -18,27 +16,23 @@ struct TestCtx {
 ErrTask client_normal(TestCtx& t) {
     t.wg.add(1);
 
+    uint8_t* buf = co_propagate(try_alloc(t.bytes));
+    std::memset(buf, 0, t.bytes);
+
     auto fd = try_await(client_socket("localhost", t.server_port));
     //std::cout << "[C] Sending " << t.packets << " packets of " << t.bytes << " bytes" << std::endl;
 
 
-    defer_async {
-        co_await close_file(fd);
-    };  
-
-    uint8_t* buf = co_propagate(try_alloc(t.bytes));
-
     for (int i = 0; i < t.packets; i++) {
-        try_await(send_socket(fd, buf, t.bytes, 0));
+        try_await(send_socket(fd, buf, t.bytes, 0), co_await close_file(fd));
     }
 
     //std::cout << "Done sending" << std::endl;
 
-
     buf[0] = 1;
-    try_await(send_socket(fd, buf, 1, 0));
-    try_await(recv_socket(fd, buf, 1, 0));
-    try_await(send_socket(fd, buf, 1, 0));
+    try_await(send_socket(fd, buf, 1, 0), co_await close_file(fd));
+    try_await(recv_socket(fd, buf, 1, 0), co_await close_file(fd));
+    try_await(send_socket(fd, buf, 1, 0), co_await close_file(fd));
     t.wg.done();
 
     delete[] buf;
@@ -47,54 +41,60 @@ ErrTask client_normal(TestCtx& t) {
 }        
 
 ErrTask server_normal(TestCtx& t) {
-
     t.server_wg.add(1);
+    uint8_t* buf = co_propagate(try_alloc(t.bytes));
+    std::memset(buf, 0, t.bytes);
 
     auto fd = try_await(server_socket(t.server_port));
-    defer_async {
-        co_await close_file(fd);
-    };
 
     t.server_wg.done();
 
-    uint8_t* buf = co_propagate(try_alloc(t.bytes));
 
-    std::memset(buf, 0, t.bytes);
     // --partial-loads-ok=yes
 
     while (!t.wg.isDone())
     {
-        auto cfd = try_await(accept_socket(fd, nullptr, nullptr));
-        defer_async {
-            co_await close_file(cfd);
-        };
+        auto cfd = try_await(accept_socket(fd, nullptr, nullptr), co_await close_file(fd));
 
         //std::cout << "[S] Accepted connection" << std::endl;
 
         while (true) {
-            auto stop = try_await(recv_socket(cfd, buf, 1, 0));
+            auto stop = try_await(recv_socket(cfd, buf, 1, 0), {
+                co_await close_file(cfd);
+                co_await close_file(fd);
+            });
+
             if (stop == 1 && buf[0] == 1) {
                 //std::cout << "[S] Stopping" << std::endl;
-                try_await(send_socket(cfd, buf, 1, 0));
+                try_await(send_socket(cfd, buf, 1, 0), {
+                    co_await close_file(cfd);
+                    co_await close_file(fd);
+                });
                 //std::cout << "[S] Stopped" << std::endl;
-                try_await(recv_socket(cfd, buf, 1, 0));
+                try_await(recv_socket(cfd, buf, 1, 0), {
+                    co_await close_file(cfd);
+                    co_await close_file(fd);
+                });
+
                 //std::cout << "[S] Stopped ack" << std::endl;
                 break;
             }
 
             //std::cout << "[S] Reading " << t.bytes - 1 << " bytes" << std::endl;
             
-            auto res = try_await(recv_all(cfd, buf, t.bytes - 1));
+            auto res = try_await(recv_all(cfd, buf, t.bytes - 1), {
+                co_await close_file(cfd);
+                co_await close_file(fd);
+            });
+
             if (res != t.bytes - 1) {
                 co_return Error("error reading from socket " + std::to_string(res) + " " + std::to_string(t.bytes));
             }
-
             //std::cout << "[S] Read " << t.bytes - 1 << " bytes" << std::endl;
         }
     }
 
     //std::cout << "[S] Server done" << std::endl;
-
     delete[] buf;
 
     co_return_void;

@@ -15,10 +15,6 @@
 
 Task<Res<int>> server_socket(int port) {
     int fd = try_await(open_socket(AF_INET, SOCK_STREAM, 0, 0));
-    defer_err_async
-    {
-        co_await close_file(fd);
-    };
 
     int opt = 1;
     sockaddr_in addr;
@@ -32,9 +28,13 @@ Task<Res<int>> server_socket(int port) {
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(int)) < 0)
         co_return Error("Error setting socket options SO_REUSEPORT");
 
-    try_await(bind_socket(fd, (sockaddr *)&addr, sizeof(addr)));
-    try_await(listen_socket(fd, 10));
+    try_await(bind_socket(fd, (sockaddr *)&addr, sizeof(addr)), {
+        co_await close_file(fd);
+    });
 
+    try_await(listen_socket(fd, 10), {
+        co_await close_file(fd);
+    });
 
     co_return fd;
 }
@@ -44,29 +44,34 @@ Task<Res<int>> client_socket(std::string host, int port) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0)
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) {
         co_return Error("Error getting address info");
+    }
 
-    defer
-    {
-        freeaddrinfo(res);
-    };
 
+    int socke_fd  = -1;
 
     for (p = res; p != nullptr; p = p->ai_next) {
         auto res = co_await open_socket(p->ai_family, p->ai_socktype, p->ai_protocol, 0);
         if (!res.is_ok()) 
             continue;   
 
-        int sockfd = res.getValue();
-        res = co_await connect_socket(sockfd, p->ai_addr, p->ai_addrlen);
+        int _sockfd = res.getValue();
+        res = co_await connect_socket(_sockfd, p->ai_addr, p->ai_addrlen);
         if (res.is_ok()) {
-            co_return sockfd;
+            socke_fd = _sockfd;
+            break;
         }
 
-        co_await close_file(sockfd);
+        co_await close_file(_sockfd);
     }
 
+    freeaddrinfo(res);
+
+    if(socke_fd != -1) {
+        co_return socke_fd;
+    }
+        
     co_return Error("Error connecting to socket");
 }
 
@@ -83,12 +88,9 @@ Task<Res<int>> recv_all(int fd, uint8_t* buf, size_t len) {
 
 Task<Res<int>> server_socket_direct(int port) {
     auto fd = try_await(server_socket(port));
-    defer_err_async
-    {
+    co_propagate(loop.register_file(fd), {
         co_await close_file(fd);
-    };
-
-    co_propagate(loop.register_file(fd));
+    });
 
     co_return fd;
 }

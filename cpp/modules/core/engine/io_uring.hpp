@@ -208,13 +208,13 @@ public:
     Res<void> init(unsigned entries) {
         int ret = io_uring_queue_init(entries, &ring, 0);
         if (ret < 0) {
-            return Error("error creating io_uring, ERRNO: " + ret);
+            return Error("error creating io_uring, ERRNO: " + std::to_string(ret));
         }
 
         ret = io_uring_register_files_sparse(&ring, max_files);
 		if (ret) {
             io_uring_queue_exit(&ring);
-            return Error("error registering files, ERRNO: " + ret);
+            return Error("error registering files, ERRNO: " + std::to_string(ret));
 		}   
 
         ret = io_uring_register_ring_fd(&ring);
@@ -242,7 +242,7 @@ public:
     Res<struct io_uring_sqe*> get_sqe() {
         struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
         if (sqe == nullptr)
-            return Error("error getting sqe, ERRNO: " + errno);
+            return Error("error getting sqe, ERRNO: " + std::to_string(errno));
 
         return sqe;
     }
@@ -250,7 +250,7 @@ public:
     Res<IORequest*> new_request(IORequestType type) {
         auto req = new (std::nothrow) IORequest();
         if (req == nullptr) {
-            return Error("error creating new request, ERRNO: " + errno);
+            return Error("error creating new request, ERRNO: " + std::to_string(errno));
         }
 
         req->handler.set_deallocator(delete_ptr<IORequest>, req);
@@ -327,14 +327,17 @@ public:
             }
 
             if (ACTIVE_FIBERS == 0 && pending_io_requests == 0) {
-                std::cout << "No active fibers and no pending io requests, exiting" << std::endl;
+                if (results.size() > 0) {
+                    std::cerr << "There are pending io requests but no active fibers, this should never happen" << std::endl;
+                    exit(1);
+                }
+
                 running = false;
                 break;
             }
 
             int res = io_uring_wait_cqe(&ring, &cqe);
         }
-
     }
 
     ~EventLoop() {
@@ -471,7 +474,7 @@ Future<Res<int>> bind_socket(int sockfd, struct sockaddr *addr, unsigned addrlen
     return req->get_handler();
     #else
     if(bind(sockfd, addr, addrlen) < 0) {
-        return Error("error binding socket, ERRNO: " + errno);
+        return Error("error binding socket, ERRNO: " + std::to_string(errno));
     }    
     return 0;
     #endif
@@ -487,7 +490,7 @@ Future<Res<int>> listen_socket(int sockfd, int backlog) {
     return req->get_handler();
     #else
     if(listen(sockfd, backlog) < 0) {
-        return Error("error listening socket, ERRNO: " + errno);
+        return Error("error listening socket, ERRNO: " + std::to_string(errno));
     }
 
     return 0;

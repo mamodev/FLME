@@ -1,4 +1,4 @@
-#define DEBUG
+// #define DEBUG
 
 #include <set>  
 #include <string>
@@ -9,7 +9,7 @@
 #include <core.hpp>
 
 Task<int> t4 () {
-    try_await(waitMS(1));    
+    co_await(waitMS(1));    
     co_return 1;
 }
 
@@ -48,33 +48,39 @@ Task<int> t_imm() {
 }
 
 Task<int> t_mix10() {
-    try_await(waitMS(1));
+    co_await (waitMS(1));
+    co_return 1;
 };
 
 Task<int> t_mix9() {
     co_await t_mix10();
+    co_return 1;
 };
 
 Task<int> t_mix8() {
-    try_await(waitMS(1));
+    co_await(waitMS(1));
     co_await t_mix9();
+    co_return 1;
 };
 
 Task<int> t_mix7() {
     co_await t_mix8();
+    co_return 1;
 };
 
 Task<int> t_mix6() {
-    try_await(waitMS(1));
+    co_await(waitMS(1));
     co_await t_mix7();
+    co_return 1;
 };
 
 Task<int> t_mix5() {
     co_await t_mix6();
+    co_return 1;
 };
 
 Task<int> t_mix4() {
-    try_await(waitMS(1));
+    co_await(waitMS(1));
     // co_await t_mix5();
     co_return 1;
 };
@@ -105,13 +111,13 @@ Task<int> t_mix() {
 Task<Res<void>> init(int argc, char **argv) {
 
     int i = 1;
-    // {
-    //     i = co_await t();
-    // }
+    {
+        i = co_await t();
+    }
 
-    // {
-    //     i = co_await t_imm();
-    // }
+    {
+        i = co_await t_imm();
+    }
 
     {
         i = co_await t_mix();

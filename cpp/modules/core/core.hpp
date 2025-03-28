@@ -32,19 +32,21 @@
 #include "corutines/fiber.hpp"
 #include "corutines/sync.hpp"
 
-
 using ErrTask = Task<Res<void>>;
 
 Task<Res<void>> init(int argc, char** argv); 
+
+int exitCode = -1;
 
 Fiber __main__fiber(int argc, char** argv) { 
     auto res = co_await init(argc, argv); 
     if(!res.is_ok()) { 
         std::cout << "Error: " << res.getError().message << std::endl; 
-        exit(1); 
+        exitCode = 1;
     } 
 
-    exit(0); 
+    exitCode = 0;
+    co_return;
 } 
 
 int main(int argc, char** argv) { 
@@ -56,7 +58,10 @@ int main(int argc, char** argv) {
     __main__fiber(argc, argv); 
     loop.loop(); 
 
-    std::cerr << "Event loop exited" << std::endl;
+    if(exitCode == -1) {
+        std::cerr << "No exit code set, this should never happen" << std::endl;
+        return 2;
+    }
 
-    return 0; 
+    return exitCode;
 }

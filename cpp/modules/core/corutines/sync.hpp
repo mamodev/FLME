@@ -50,3 +50,42 @@ struct WaitGroup {
         return Future<int>(handler);
     }
 };
+
+
+template <typename T>
+struct CoQueue {
+    std::vector<T> data_buffer;
+    std::vector<FutureHandler<T>*> waiters;
+
+    CoQueue() {
+        data_buffer.reserve(10);
+        waiters.reserve(10);
+    }
+
+    Future<T> pop() {
+        if (data_buffer.empty()) {
+            FutureHandler<T>* waiter = new FutureHandler<T>();
+            waiter->set_deallocator(delete_ptr<FutureHandler<T>>, waiter);
+
+            waiters.push_back(waiter);
+            return Future<T>(waiter);
+        } else {
+            T value = data_buffer.back();
+            data_buffer.pop_back();
+            return value;
+        }
+    }
+
+    void push(T value) {
+        if (waiters.empty()) {
+            data_buffer.push_back(value);
+        } else {
+            FutureHandler<T>* waiter = waiters.back();
+            waiters.pop_back();
+            waiter->set(value);
+        }
+    }
+
+    CoQueue(const CoQueue&) = delete;
+    CoQueue& operator=(const CoQueue&) = delete;
+};

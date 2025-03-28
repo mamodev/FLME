@@ -1,14 +1,16 @@
-CXX = g++
+CXX = clang++
 
 INCLUDES := $(shell find ./modules -type d | sed 's/^/-I/')
 
+# INCLUDES += -I./libs/libtorch/include -I./libs/libtorch/include/torch/csrc/api/include -D_GLIBCXX_USE_CXX11_ABI=1
 # CXXFLAGS = -std=c++20 -Wall -Wextra $(INCLUDES)
-CXXFLAGS = -std=c++20 -g -o0 $(INCLUDES) -luring 
+
+CXXFLAGS = -std=c++20 -g -o0 $(INCLUDES) -luring
 
 SRC_DIR = modules
 BUILD_DIR = build
 
-# MODULE_IFACE_EXT = hpp
+# MODULE_IFACE_EXT = hpp 
 MODULE_IMPL_EXT = cpp
 MAIN_SRC = main.cpp
 TARGET = $(BUILD_DIR)/main
@@ -23,6 +25,10 @@ MAIN_OBJ = $(BUILD_DIR)/main.o
 # OBJS = $(MODULE_IFACE_OBJS) $(MODULE_IMPL_OBJS) $(MAIN_OBJ)
 OBJS = $(MODULE_IMPL_OBJS) $(MAIN_OBJ)
 
+# TORCH_BACKEND := $(shell if command -v nvidia-smi > /dev/null && nvidia-smi --query-gpu=name --format=csv,noheader > /dev/null; then echo CUDA; elif command -v rocminfo > /dev/null && rocminfo | grep -q "Agent"; then echo ROCm; else echo CPU; fi)
+
+# torch:
+# 	@echo $(TORCH_BACKEND) $(BACKEND_VERSION)
 
 
 all: $(TARGET)

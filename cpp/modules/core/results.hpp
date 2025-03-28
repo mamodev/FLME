@@ -93,29 +93,17 @@ T unwrap_or_excep(Res<T> res) {
 })
 
 
-// WARNING: propagate in a coroutine will not trigger defer_error statements,
-// if you need this behavioe use unwrap_or_excep
-#define co_propagate(res) ({ \
-    auto _r = res; \
+#define _try_await(x, y...) ({ \
+    auto _r = x; \
     if (!_r.is_ok()) { \
+        y; \
         co_return _r.getError(); \
     } \
     _r.getValue(); \
 })
 
-
-#define try_await(x) unwrap_or_excep(co_await x)
-
-
-// Res<uint8_t *> try_alloc(size_t size) {
-//     auto ptr = new (std::nothrow) uint8_t[size];
-//     if (ptr == nullptr) {
-//         return ERR_OUT_OF_MEMORY;
-//     }
-// }
-
-
-
+#define try_await(x, ...) _try_await(co_await x, __VA_ARGS__)
+#define co_propagate(x, ...) _try_await(x, __VA_ARGS__)
 
 template<typename T = uint8_t>
 static inline Res<T*> try_alloc(size_t size = 1) {

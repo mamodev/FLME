@@ -9,19 +9,14 @@
 
 #include <utility>
 #include <vector>
+
 #include "../utils.hpp"
+#include "shared.hpp"
+#include "defer.hpp"
+#include "../results.hpp" 
 
-
-template <typename T, template <typename> class Template>
-struct is_specialization_of : std::false_type {};
-
-// Specialization: true if T is Template<U> for any U
-template <typename U, template <typename> class Template>
-struct is_specialization_of<Template<U>, Template> : std::true_type {};
-
-// Helper variable template for convenience
-template <typename T, template <typename> class Template>
-inline constexpr bool is_specialization_of_v = is_specialization_of<T, Template>::value;
+#ifdef DEBUG
+#include <source_location>
 
 #define COL_RESET  "\033[0m"  // Reset
 #define COL_BOLD   "\033[1m"  // Bold
@@ -55,11 +50,6 @@ inline bool is_included_task(const std::string&) {
 }
 #endif
 
-            // debug(COL_BOLD COL_BLUE "[" << function_name << ", " \
-            //       << COL_GREEN << this->loc.file_name() << ":" \
-            //       << COL_YELLOW << this->loc.line() \
-            //       << COL_BLUE << "] " << this->handle.address() << COL_RESET << " " << stmnt << "[this: " << this << "]"); \
-
 #define tdebug(stmnt) \
     do { \
         std::string function_name = this->loc.function_name(); \
@@ -73,102 +63,113 @@ inline bool is_included_task(const std::string&) {
             ); \
         } \
     } while (0)
+#else
+#define tdebug(stmnt) do {} while (0)
+#endif
 
-#include <source_location>
+
+// HELPER FUNCTIONS
+template <typename T, template <typename> class Template>
+struct is_specialization_of : std::false_type {};
+
+template <typename U, template <typename> class Template>
+struct is_specialization_of<Template<U>, Template> : std::true_type {};
+
+template <typename T, template <typename> class Template>
+inline constexpr bool is_specialization_of_v = is_specialization_of<T, Template>::value;
+// HELPER FUNCTIONS
+
+
+template <typename T>
+struct Task;
+
+struct TaskFinalSuspend {
+    bool discarded;
+    std::optional<std::coroutine_handle<>> continuation;
+
+    TaskFinalSuspend() : discarded(false), continuation(std::nullopt) {}
+
+    #ifdef DEBUG
+    std::source_location loc;
+    std::coroutine_handle<> handle;
+    TaskFinalSuspend(std::source_location loc, std::coroutine_handle<> handle) : discarded(false), continuation(std::nullopt), loc(loc), handle(handle) {
+        tdebug("constructor");
+    }
+    #endif
+ 
+
+    bool await_ready() noexcept {
+        tdebug("discarded: " << discarded << " has_continuation: " << continuation.has_value());
+        return discarded;
+    }
+
+    void await_suspend(std::coroutine_handle<> __ub_if_resumed) noexcept {
+        tdebug("suspend, has_continuation: " << continuation.has_value());
+
+        if (continuation.has_value()) {
+            continuation.value().resume();
+
+        }
+    }
+
+    void await_resume()  noexcept {
+        tdebug("resuming, and auto destroying handle");
+    }
+};
 
 template <typename T = void>
-struct [[nodiscard]] Task {
-    std::source_location loc;
-    
+struct Task {
     struct promise_type;
+
     std::coroutine_handle<promise_type> handle;
-    bool* discarded = nullptr;
+    
+    Task() : handle(nullptr) { tdebug("Task<T>::Task()"); }
 
-    Task(std::coroutine_handle<promise_type> handle, bool* discarded, std::source_location loc) : handle(handle), discarded(discarded), loc(loc) {
+    #ifdef DEBUG
+    std::source_location loc;
+    Task(std::coroutine_handle<promise_type> handle, std::source_location loc) : handle(handle), loc(loc) {
         tdebug("Task<T>::Task(handle, discarded, loc)");
-
     }
-
-    Task() : handle(nullptr) {
-        tdebug("Task<T>::Task()");
-    }
-
-    struct final_suspend_aw {
-        promise_type* promise;
-        std::source_location loc;
-        std::coroutine_handle<> handle;
-
-        final_suspend_aw(promise_type* promise) : promise(promise), loc(promise->loc), handle(promise->handle) {
-            tdebug("final_suspend_aw::final_suspend_aw");
-        }
-
-        bool await_ready() noexcept {
-            tdebug("discarded: " << promise->discarded << " has_continuation: " << promise->continuation.has_value());
-            if (promise->discarded) {
-                return true;
-            }
-
-            return false;
-        }
-
-        void await_suspend(std::coroutine_handle<> __ub_if_resumed) noexcept {
-            tdebug("final_suspend_aw::await_suspend");
-
-            if (promise->continuation.has_value()) {
-
-                tdebug("final_suspend_aw::await_suspend, resuming continuation");
-                promise->continuation.value().resume();
-            }
-        }
-
-        void await_resume()  noexcept {
-            tdebug("final_suspend_aw::await_resume");
-            // // std::cout << "final_suspend_aw::await_resume" << std::endl;
-            // if (promise->continuation.has_value()) {
-            //     tdebug("final_suspend_aw::await_resume, resuming continuation");
-            //     promise->continuation.value().resume();
-            // }
-
-            // tdebug("final_suspend_aw::await_resume, after resume")
-        }
-
-        ~final_suspend_aw() {
-            tdebug("final_suspend_aw::~final_suspend_aw");
-        }
-
-    };
+    #else
+    Task(std::coroutine_handle<promise_type> handle) : handle(handle) {}
+    #endif
 
     struct promise_type {
-        bool discarded = false;
-        bool detached = false;
-        std::optional<T> value;
-        std::optional<std::coroutine_handle<>> continuation;
+        ENABLE_GET_CURRENT_HANDLE
 
+        TaskFinalSuspend fs;
+        std::optional<T> value;
+
+        #ifdef DEBUG
         std::coroutine_handle<promise_type> handle;
         std::source_location loc;
 
-        promise_type(std::source_location loc = std::source_location::current()) 
-        : loc(loc) , handle(std::coroutine_handle<promise_type>::from_promise(*this)) {
-            // tdebug("Primise created at " << loc.file_name() << ":" << loc.line());
+        promise_type(std::source_location loc = std::source_location::current()) {
+            this->loc = loc;
+            this->handle = std::coroutine_handle<promise_type>::from_promise(*this);
+            this->fs = TaskFinalSuspend(loc, this->handle);
         }
 
         Task get_return_object() {
-            this->value = std::nullopt;
-            this->continuation = std::nullopt;
-            this->discarded = false;
-            return Task(handle, &discarded, loc);
+            return Task(std::coroutine_handle<promise_type>::from_promise(*this), loc);
         }
+
+        #else
+        promise_type() : fs() {}   
+
+        Task get_return_object() {
+            return Task(std::coroutine_handle<promise_type>::from_promise(*this));
+        }    
+        #endif
 
         std::suspend_never initial_suspend() { return {}; }
 
-        final_suspend_aw final_suspend() noexcept {
+        TaskFinalSuspend final_suspend() noexcept {
             tdebug("promise_type::final_suspend");
-            // std::cout << "task<T>::promise_type::final_suspend" << std::endl;
-            return final_suspend_aw{this};
+            return fs;
         }
 
         void unhandled_exception() {
-            // std::cout << "task<T>::promise_type::unhandled_exception" << std::endl;
             const char * err = nullptr;
             try {
                 std::rethrow_exception(std::current_exception());
@@ -192,10 +193,6 @@ struct [[nodiscard]] Task {
             this->value = v;
             tdebug("task<T>::promise_type::return_value, has_value");
         }
-
-        ~promise_type() {
-            tdebug("task<T>::promise_type::~promise_type");
-        }
     };
 
     bool await_ready() {
@@ -204,11 +201,8 @@ struct [[nodiscard]] Task {
             exit(1);
         }
 
-        auto has_value = handle.promise().value.has_value();
-
-        tdebug("has_value: " << has_value);
-
-        return has_value;
+        tdebug("has_value: " << handle.promise().value.has_value());
+        return handle.promise().value.has_value();
     }
 
     void await_suspend(std::coroutine_handle<> h) {
@@ -218,22 +212,20 @@ struct [[nodiscard]] Task {
         }
 
         tdebug("task<T>::await_suspend");
-        if (handle.promise().continuation.has_value()) {
+        if (handle.promise().fs.continuation.has_value()) {
             throw std::runtime_error("Awaiting task in invalid state, this should never happen");
         }
 
-        handle.promise().continuation = h;
+        handle.promise().fs.continuation = h;
     }
 
     T await_resume() {
         tdebug("task<T>::await_resume");
-
         if(!handle) {
             std::cerr << "Task<T>::await_resume() Awaiting invalid task, this should never happen" << std::endl;
             exit(1);
         }
 
-        // std::cout << "task<T>::await_resume" << std::endl;
         if (!handle.promise().value.has_value()) {
             throw std::runtime_error("Resuming task in invalid state, this should never happen, the promise has no value");
         }
@@ -249,104 +241,84 @@ struct [[nodiscard]] Task {
             return *this;
 
         
+        #ifdef DEBUG
         loc = other.loc;
+        #endif
         handle = std::exchange(other.handle, {});
-        discarded = std::exchange(other.discarded, nullptr);
 
         return *this;
     }
 
     Task(Task&& other) {
-        handle = std::exchange(other.handle, {});
-        discarded = std::exchange(other.discarded, nullptr);
+        #ifdef DEBUG
         loc = other.loc;
+        #endif
+        handle = std::exchange(other.handle, {});
     }
 
     ~Task() {
-        if(handle) {
-            tdebug("task<T>::~Task " << (discarded != nullptr) << " this ptr: " << this);
+        tdebug("task<T>::~Task ");
+        if(!handle) {
+            return;
+        }
 
-            if(discarded != nullptr) {
-                *discarded = true;
-            }
-
-            if(handle && !handle.promise().detached) {
-                auto a = handle.address();
-                handle.destroy();
-            }
+        // this should not destroy the handle if promise not completed yet
+        if (!handle.promise().value.has_value()) {
+            handle.promise().fs.discarded = true;
+        } else {
+            handle.destroy();
         }
     }   
 };
 
+#define co_return_void co_return std::nullopt;
+
 template <>
-struct [[nodiscard]] Task<void> {
-    std::source_location loc;
+struct Task<void> {
     struct promise_type;
     std::coroutine_handle<promise_type> handle;
-    bool* discarded = nullptr;
 
-    Task(std::coroutine_handle<promise_type> handle, bool* discarded, std::source_location loc = std::source_location::current()) 
-        : handle(handle), discarded(discarded), loc(loc) {
-        tdebug("Task<void>::Task(handle, discarded, loc)");
+    Task() : handle(nullptr) {tdebug("Task<void>::Task()");}
+
+    #ifdef DEBUG
+    std::source_location loc;
+    Task(std::coroutine_handle<promise_type> handle, std::source_location loc) : handle(handle), loc(loc) {
+        tdebug("Task<void>::Task(handle, loc)");
     }
-
-    Task() : handle(nullptr) {
-        tdebug("Task<void>::Task()");
-    }
-
-    struct final_suspend_aw {
-        promise_type* promise;
-        std::source_location loc;
-        std::coroutine_handle<> handle;
-
-        final_suspend_aw(promise_type* promise) : promise(promise), loc(promise->loc), handle(promise->handle) {
-            tdebug("final_suspend_aw::final_suspend_aw");
-        }
-
-        bool await_ready() noexcept {
-            tdebug("discarded: " << promise->discarded << " has_continuation: " << promise->continuation.has_value());
-            return promise->discarded;
-        }
-
-        void await_suspend(std::coroutine_handle<> __ub_if_resumed) noexcept {
-            tdebug("final_suspend_aw::await_suspend");
-
-            if (promise->continuation.has_value()) {
-                tdebug("final_suspend_aw::await_suspend, resuming continuation");
-                promise->continuation.value().resume();
-            }
-        }
-
-        void await_resume() noexcept {
-            tdebug("final_suspend_aw::await_resume");
-        }
-
-        ~final_suspend_aw() {
-            tdebug("final_suspend_aw::~final_suspend_aw");
-        }
-    };
+    #else 
+    Task(std::coroutine_handle<promise_type> handle) : handle(handle) {}
+    #endif
 
     struct promise_type {
-        bool discarded = false;
-        bool detached = false;
-        std::optional<std::coroutine_handle<>> continuation;
+        bool done;  //this replace the Task<T> optional value
+        TaskFinalSuspend fs;
+
+        #ifdef DEBUG
         std::coroutine_handle<promise_type> handle;
         std::source_location loc;
-
-        promise_type(std::source_location loc = std::source_location::current())
-            : loc(loc), handle(std::coroutine_handle<promise_type>::from_promise(*this)) {}
-
-        Task get_return_object() {
-            this->continuation = std::nullopt;
-            this->discarded = false;
-            return Task(handle, &discarded, loc);
+        promise_type(std::source_location loc = std::source_location::current()) {
+            this->loc = loc;
+            this->handle = std::coroutine_handle<promise_type>::from_promise(*this);
+            this->fs = TaskFinalSuspend(loc, this->handle);
         }
 
+        Task get_return_object() {
+            return Task(std::coroutine_handle<promise_type>::from_promise(*this), loc);
+        }
+
+        #else
+        promise_type() : fs(), done(false) {}
+        Task get_return_object() {
+            return Task(std::coroutine_handle<promise_type>::from_promise(*this));
+        }
+        #endif
+
+  
         std::suspend_never initial_suspend() { return {}; }
 
-        final_suspend_aw final_suspend() noexcept {
+        TaskFinalSuspend final_suspend() noexcept {
             tdebug("promise_type::final_suspend");
-            return final_suspend_aw{this};
+            return fs;
         }
 
         void unhandled_exception() {
@@ -367,11 +339,8 @@ struct [[nodiscard]] Task<void> {
         }
 
         void return_void() {
+            done = true;
             tdebug("Task<void>::promise_type::return_void");
-        }
-
-        ~promise_type() {
-            tdebug("Task<void>::promise_type::~promise_type");
         }
     };
 
@@ -381,7 +350,7 @@ struct [[nodiscard]] Task<void> {
             exit(1);
         }
 
-        return handle.done();
+        return handle.promise().done;
     }
 
     void await_suspend(std::coroutine_handle<> h) {
@@ -391,11 +360,11 @@ struct [[nodiscard]] Task<void> {
         }
 
         tdebug("Task<void>::await_suspend");
-        if (handle.promise().continuation.has_value()) {
+        if (handle.promise().fs.continuation.has_value()) {
             throw std::runtime_error("Awaiting Task<void> in invalid state, this should never happen");
         }
 
-        handle.promise().continuation = h;
+        handle.promise().fs.continuation = h;
     }
 
     void await_resume() {
@@ -416,127 +385,34 @@ struct [[nodiscard]] Task<void> {
 
     Task& operator=(Task&& other) {
         if (this == &other)
-            return *this;
+            return *this;   
 
+
+        #ifdef DEBUG
         loc = other.loc;
+        #endif
         handle = std::exchange(other.handle, {});
-        discarded = std::exchange(other.discarded, nullptr);
 
         return *this;
     }
 
     Task(Task&& other) {
-        handle = std::exchange(other.handle, {});
-        discarded = std::exchange(other.discarded, nullptr);
+        #ifdef DEBUG
         loc = other.loc;
+        #endif
+        handle = std::exchange(other.handle, {});
     }
 
     ~Task() {
-        if (handle) {
-            tdebug("Task<void>::~Task " << (discarded != nullptr) << " this ptr: " << this);
+        tdebug("Task<void>::~Task");
+        if (!handle) {
+           return;
+        }
 
-            if (discarded != nullptr) {
-                *discarded = true;
-            }
-
-            if (handle && !handle.promise().detached) {
-                std::cout << "Destroying handle" << std::endl;
-
-
-                handle.destroy();
-            } else {
-                std::cout << "Detached handle" << std::endl;
-            }
+        if (!handle.promise().done) {
+            handle.promise().fs.discarded = true;
+        } else {
+            handle.destroy();
         }
     }
 };
-
-
-// template <>
-// struct [[nodiscard]] Task<void> {
-//     struct promise_type;
-//     std::coroutine_handle<promise_type> handle;
-
-//     bool* discarded = nullptr;
-
-//     Task(std::coroutine_handle<promise_type> handle, bool* discarded) : handle(handle), discarded(discarded) {}
-
-
-//     struct final_suspend_aw {
-//         promise_type& promise;
-//         final_suspend_aw(promise_type& promise) : promise(promise) {}
-
-//         bool await_ready() noexcept {
-//             return promise.continuation.has_value() || promise.discarded;
-//         }
-
-//         void await_suspend(std::coroutine_handle<> h) noexcept {
-//         }
-
-//         void await_resume()  noexcept {
-//             if (promise.continuation.has_value()) {
-//                 promise.continuation.value().resume();
-//             }
-//         }
-//     };
-
-//     struct promise_type {
-//         bool done = false;
-//         bool discarded = false;
-//         bool detached = false;
-//         std::optional<std::coroutine_handle<>> continuation;
-
-//         Task get_return_object() {
-//             this->discarded = false;    
-//             this->done = false;
-//             this->continuation = std::nullopt;
-//             return Task{std::coroutine_handle<promise_type>::from_promise(*this), &discarded};
-//         }
-
-
-//         std::suspend_never initial_suspend() { return {}; }
-
-//         final_suspend_aw final_suspend() noexcept {
-//             return final_suspend_aw{*this};
-//         }
-
-//         void unhandled_exception() {};
-
-        
-//         void return_void() {
-//             done = true;
-//         }
-//     };
-
-//     bool await_ready() {
-//         return handle.promise().done;
-//     }
-
-//     void await_suspend(std::coroutine_handle<> h) {
-//         if (handle.promise().continuation.has_value()) {
-//             throw std::runtime_error("Awaiting task in invalid state, this should never happen");
-//         }
-
-//         handle.promise().continuation = h;
-//     }
-
-//     void await_resume() {
-//         if (!handle.promise().done) {
-//             throw std::runtime_error("Resuming task in invalid state, this should never happen");
-//         }
-
-//         return;
-//     }
-
-//     Task(const Task&) = delete;
-//     Task& operator=(const Task&) = delete;
-
-//     ~Task() {
-//         *discarded = true;
-
-//         if (!handle.promise().detached) {
-//             handle.destroy();
-//         }
-
-//     }
-// };

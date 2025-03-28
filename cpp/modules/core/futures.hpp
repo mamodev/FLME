@@ -131,28 +131,16 @@ struct Future {
     }
 
 
-    template <typename PromiseType>
-    void await_suspend(std::coroutine_handle<PromiseType> handle) {
+    void await_suspend(std::coroutine_handle<> handle) {
         // std::cout << "Future::await_suspend id: " << name << std::endl;
 
         if (std::holds_alternative<T>(value)) {
             handle.resume();
         } else if (std::holds_alternative<FutureHandler<T>*>(value)) {
-            
-            if constexpr (has_detached_v<PromiseType>) {  
-                // debug("Future::await_suspend");
-                auto handleAddress = handle.address();
-                auto typedHandle = std::coroutine_handle<PromiseType>::from_address(handleAddress);
-                typedHandle.promise().detached = true;  // Mark ownership transfer
-            }
-
             std::get<FutureHandler<T>*>(value)->set(handle);
-
         } else {
             throw std::runtime_error("Awaiting future in invalid state, this should never happen");
         }
-
-
     }
 
     T await_resume() {
