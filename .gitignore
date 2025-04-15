@@ -1,3 +1,6 @@
 .vscode
 .vscode/*
 .old
+.venv
+__pycache__
+.ipynb_checkpoints
