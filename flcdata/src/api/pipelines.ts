@@ -97,6 +97,7 @@ export function useRerunPipeline() {
 type PipelineLog = {
   stdout: string[]
   stderr: string[]
+  config: any
 }
 
 // Hook for GET /api/pipelines/:pipeline_id/log

@@ -65,6 +65,50 @@ async def strategy(s, n, r):
     print("Strategy completed", flush=True)
 
 
+async def async_strategy(s, min_upd, r):
+    # this strategy aggregate when min_upd are received
+    print(f"Starting strategy with {min_upd} clients", flush=True)
+    for i in range(r):
+        await asyncio.sleep(0)
+        
+        start_time = time.time()
+
+        while len(s.updates) < min_upd:
+            await s.updates.on_size_change()
+
+        updates = s.updates.extract()
+        packets, auths = [list(t) for t in zip(*updates)]
+        local_models = [(p.data.model_state, p.meta.train_samples) for p in packets]
+        meta = [p.meta for p in packets]
+        
+        s.updates.clear()
+        
+        model = {k: sum([m[k] * n for m, n in local_models]) / sum([n for _, n in local_models]) for k in local_models[0][0].keys()}
+        
+        s.repo.put_model(model, {
+            "contributors": [
+                {
+                    "auth": dict(auth),
+                    "meta": meta.to_dict(),
+                    # "model": m,
+                }
+
+                for auth, meta, m in zip(auths, meta, local_models)
+            ]
+        })
+
+        await Connection.broadcast_event(protocol.NewGlobalModelEventID, s.listeners.extract())
+        
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Training round completed in {elapsed_time:.2f} seconds.")
+
+
+def async_fed_avg_factory(args):
+    async def fed_avg(s):
+        await async_strategy(s, args.min_upd, args.rounds)
+    return fed_avg
+
 def fed_avg_factory(arga):
     async def fed_avg(s):
         await strategy(s, args.nclients, args.rounds)
@@ -75,7 +119,8 @@ def fed_prox_factory(args):
 
 STRAT_FACT = {
     "fed_avg": fed_avg_factory,
-    "fed_prox": fed_prox_factory
+    "fed_prox": fed_prox_factory,
+    "fed_avg_async": async_fed_avg_factory,
 }
 
 if __name__ == "__main__":
@@ -95,6 +140,9 @@ if __name__ == "__main__":
     fed_prox_parser = subparsers.add_parser("fed_prox", help="Federated Proximal strategy")
     fed_prox_parser.add_argument("--nclients", type=int, required=True, help="Number of clients")
     fed_prox_parser.add_argument("--mu", type=float, required=True, help="Regularization parameter for FedProx")
+
+    async_fed_avg_parser = subparsers.add_parser("fed_avg_async", help="Federated Averaging strategy with async aggregation")
+    async_fed_avg_parser.add_argument("--min_upd", type=int, required=True, help="Minimum number of updates to aggregate")
     
     args = parser.parse_args()
     if args.strategy is None:

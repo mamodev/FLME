@@ -30,6 +30,7 @@ parser.add_argument("--port", type=int, default=8888)
 parser.add_argument("--nclients", type=int, default=1)
 parser.add_argument("--client_id", type=int, default=0)    
 parser.add_argument("--dataset", type=str, required=True)
+parser.add_argument("--strategy", type=str, default="sync", choices=["sync", "async"], help="Synchronization strategy")
 
 args = parser.parse_args()
 
@@ -62,7 +63,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 train_loaders = [dataset_to_device(ds, device) for ds in train_dss]
 
 
-async def client(r, w, ls, args):
+async def sync_client(r, w, ls, args, extra_args=None):
     momentum = 0.1
     lr = 0.01
     ephocs = 15
@@ -112,6 +113,76 @@ async def client(r, w, ls, args):
 
 
 
+class RandomTicker:
+    def __init__(self):
+        self.waiters = []
+    
+    async def wait(self):
+        asyncio.sleep(0)
+        
+        if len(self.waiters) == 0:
+            return
+        
+        future = asyncio.get_running_loop().create_future()
+        self.waiters.append(future)
+        return await future
+    
+    def done(self):
+        import numpy as np
+        random_waiter = np.random.choice(self.waiters)
+        self.waiters.remove(random_waiter)
+        random_waiter.set_result(None)
+
+
+async def async_client(r, w, ls, args, extra_args):
+    momentum = 0.1
+    lr = 0.01
+    ephocs = 15
+    net = Model(insize=train_dss[0].n_features, outsize=train_dss[0].n_classes)
+    net.to(device)
+    optimizer = SGD(net.parameters(), lr=lr, momentum=momentum)
+
+    # from torch.amp import autocast, GradScaler
+    # scaler = GradScaler("cuda")
+    ticker = extra_args["ticker"]
+
+    while True:
+        await ticker.wait()
+        model = await rpc.get_latest_model(w, r)
+        model_data = model.model
+        
+        train_loader = train_loaders[args.client_id % len(train_loaders)]
+
+        net.load_state_dict(model_data.model_state)
+        net.to(device)
+
+        for e in range(ephocs):
+            net.train()
+            for i, (data, target) in enumerate(train_loader):
+                optimizer.zero_grad()
+
+                output = net(data)
+                loss = functional.nll_loss(output, target)
+                loss.backward()
+                optimizer.step()
+
+        model_meta = protocol.ModelMeta(
+            momentum=momentum,
+            learning_rate=lr,
+            train_loss=0.1,
+            test_loss=0.2,
+            local_epoch=ephocs,
+            train_samples=len(train_loader), 
+        )
+
+        net.to("cpu")
+        model_data = net.state_dict()
+
+        await rpc.put_model(w, r, protocol.ModelData(model_data), model_meta)
+        ticker.done()
+
+        await ls.signal(protocol.NewGlobalModelEventID)
+
 
 # wait max 3 seconds for the server to start
 async def wait_server(args):
@@ -138,13 +209,25 @@ async def __run(args):
         return
 
     tasks = []
+    
+    import numpy as np
+    clients = [c for c in range(args.nclients)]
+    np.random.shuffle(clients)
+    ticker = RandomTicker()
+
+    extra_args = {
+        "ticker": ticker,
+    } if args.strategy == "async" else None
+
     for i in range(args.nclients):
         auth = protocol.Auth(f"client_{i}", 0, 0, 0)
 
         args = argparse.Namespace(**vars(args))
         args.client_id = i
 
-        tasks.append(ClientTask(args, auth, client))  # Directly append the coroutine
+        client_fn = sync_client if args.strategy == "sync" else async_client
+
+        tasks.append(ClientTask(args, auth, client_fn,extra_args=extra_args))  # Directly append the coroutine
 
     await asyncio.gather(*tasks)  # Await all coroutines
     print("All tasks completed")

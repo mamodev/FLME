@@ -1,5 +1,5 @@
-import React from "react";
-import { Stack, Tab, Tabs } from "@mui/material";
+import React, { JSX } from "react";
+import { Box, Stack, Tab, Tabs } from "@mui/material";
 import { ConfigProvider } from "../contexts/ConfigContext";
 import { GeneratorProvider } from "../contexts/GeneratorContext";
 import { SidebarProvider } from "../contexts/SidebarContext";
@@ -11,6 +11,10 @@ import { SimulationAnalysis } from "./SimulationAnalysis";
 import { PipelinesPanel } from "./PipelinesPanel";
 import { DatasetPanel } from "./DatasetsPanel";
 import { DatasetGeneratorPanel } from "./DatasetGeneratorPanel";
+
+import { Mosaic, MosaicWindow } from 'react-mosaic-component';
+import 'react-mosaic-component/react-mosaic-component.css';
+
 
 const AppContent: React.FC = () => {
   const [tabIndex, setTabIndex] = React.useState(
@@ -57,6 +61,15 @@ const AppContent: React.FC = () => {
   );
 };
 
+export type ViewId = 'a' | 'b' | 'c' | 'new';
+
+const TITLE_MAP: Record<ViewId, string> = {
+  a: 'Left Window',
+  b: 'Top Right Window',
+  c: 'Bottom Right Window',
+  new: 'New Window',
+};
+
 const App: React.FC = () => {
   return (
     <ConfigProvider>
@@ -67,6 +80,25 @@ const App: React.FC = () => {
       </GeneratorProvider>
     </ConfigProvider>
   );
+  // return <div id="app">
+  //    <Mosaic<ViewId>
+  //     renderTile={(id, path) => (
+  //       <MosaicWindow<ViewId> path={path} createNode={() => 'new'} title={TITLE_MAP[id]}>
+  //         <h1>{TITLE_MAP[id]}</h1>
+  //       </MosaicWindow>
+  //     )}
+  //     initialValue={{
+  //       direction: 'row',
+  //       first: 'a',
+  //       second: {
+  //         direction: 'column',
+  //         first: 'b',
+  //         second: 'c',
+  //       },
+  //     }}
+  //  />
+  // </div>
+
 };
 
 export default App;

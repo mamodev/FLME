@@ -12,6 +12,7 @@ export type SaveRequest = {
     data_generator: ModuleConfig;
     distribution: ModuleConfig;
     partitioner: ModuleConfig;
+    transformers: ModuleConfig[];
     file_name: string;
 }
 

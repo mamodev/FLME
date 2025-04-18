@@ -63,7 +63,6 @@ type GeneratorContextType = {
   addTransformer: (module: Module) => void;
   removeTransformer: (index: number) => void;
   updateTransformerParams: (index: number, params: Record<string, any>) => void;
-  setTransformerModule: (index: number, module: Module) => void;
   moveTransformerUp: (index: number) => void;
   moveTransformerDown: (index: number) => void;
 
@@ -251,32 +250,9 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     );
   });
 
-  // Helper function to restore transformers from cache
-  const restoreTransformersFromCache = useCallback(() => {
-    const cachedTransformers = loadFromCache<any[]>(configHash, 'transformers', []);
-    
-    // Validate and restore each transformer
-    return cachedTransformers.map(item => {
-      // Find the module by name in the config
-      const module = config.transformers.find(m => m.name === item.module.name);
-      if (!module) {
-        // If module not found, use the first transformer as fallback
-        return {
-          module: config.transformers[0],
-          params: generateDefaultParameters(config.transformers[0])
-        };
-      }
-      
-      return {
-        module,
-        params: item.params
-      };
-    });
-  }, [config, configHash]);
-
   // Initialize transformers state
   const [transformers, setTransformersInternal] = useState<TransformerWithParams[]>(() => {
-    return restoreTransformersFromCache();
+    return loadFromCache<TransformerWithParams[]>(configHash, 'transformers', []);
   });
 
   const [fileSave, setFileSaveInternal] = useState<string>(() => {
@@ -424,24 +400,7 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
   const updateTransformerParams = (index: number, params: Record<string, any>) => {
     setTransformersInternal((prev) => {
       const newTransformers = [...prev];
-      if (index >= 0 && index < newTransformers.length) {
-        newTransformers[index] = { ...newTransformers[index], params };
-      }
-      return newTransformers;
-    });
-  };
-
-  // New function to switch the module of an existing transformer
-  const setTransformerModule = (index: number, module: Module) => {
-    setTransformersInternal((prev) => {
-      const newTransformers = [...prev];
-      if (index >= 0 && index < newTransformers.length) {
-        // Replace the module and reset parameters to defaults for the new module
-        newTransformers[index] = { 
-          module, 
-          params: generateDefaultParameters(module) 
-        };
-      }
+      newTransformers[index] = { ...newTransformers[index], params };
       return newTransformers;
     });
   };
@@ -542,7 +501,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     addTransformer,
     removeTransformer,
     updateTransformerParams,
-    setTransformerModule,
     moveTransformerUp,
     moveTransformerDown,
 

@@ -12,6 +12,7 @@ export type GenerateRequest = {
     data_generator: ModuleConfig;
     distribution: ModuleConfig;
     partitioner: ModuleConfig;
+    transformers: ModuleConfig[];
 }
 
 export function useGenerate(callback: (data: any) => void) {

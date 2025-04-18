@@ -63,7 +63,7 @@ class FLCDataset(Dataset):
         )
     
 from torch import nn
-class Model(nn.Module):
+class SimpleModel(nn.Module):
     def __init__(self, insize=2, outsize=8):
         super(Model, self).__init__()
         self.fc = nn.Sequential(
@@ -77,3 +77,52 @@ class Model(nn.Module):
 
     def forward(self, x):
         return self.fc(x)
+    
+class DeeperModel(nn.Module):
+    def __init__(self, insize=2, outsize=8):
+        super(DeeperModel, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(insize, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),  # Added layer
+            nn.ReLU(),              # Added layer
+            nn.Linear(256, 128),  # Added layer
+            nn.ReLU(),              # Added layer
+            nn.Linear(128, outsize),
+            nn.LogSoftmax(dim=1)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+    
+class VeryDeepModel(nn.Module):
+    def __init__(self, insize=2, outsize=8):
+        super(VeryDeepModel, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(insize, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, outsize),
+            nn.LogSoftmax(dim=1)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+    
+# Model = SimpleModel
+Model = SimpleModel

@@ -91,7 +91,8 @@ def load_module_from_directory(directory_name, module_name):
         raise ImportError("'generator' variable not found in module")
 
 def to3d(XX):
-
+    if len(XX[0]) == 3:
+        return XX
     # tnse = TSNE(
     #     n_components=3,
     #     perplexity=30,
@@ -117,6 +118,7 @@ def get_config():
         'data_generators': load_modules_from_directory('data_generators'),
         'distributions': load_modules_from_directory('distributions'),
         'partitioners': load_modules_from_directory('partitioners'),
+        "transformers": load_modules_from_directory('transformers'),
     }
     return jsonify(config)
 
@@ -132,17 +134,25 @@ def generate_data():
     data_generator = data.get('data_generator')
     distribution = data.get('distribution')
     partitioner = data.get('partitioner')
+    transformers = data.get('transformers', [])
 
     dg = load_module_from_directory('data_generators', data_generator["name"])
     dist = load_module_from_directory('distributions', distribution["name"])
     part = load_module_from_directory('partitioners', partitioner["name"])
+    trans = [
+        (load_module_from_directory('transformers', t["name"]), t["parameters"])
+        for t in transformers
+    ]
 
     XX, YY = dg.run(
         params=data_generator["parameters"],
     )
 
-    n_samples = len(XX)
-    n_classes = len(set(YY))
+    n_samples = data_generator["parameters"].get("n_samples", len(XX))
+    n_classes = data_generator["parameters"].get("n_classes", len(set(YY)))
+
+    assert len(XX) == n_samples, "n_samples must be equal to the length of XX"
+    assert len(set(YY)) <= n_classes, "n_classes must be greater than or equal to the number of unique labels in YY"
 
     distr_map = dist.run(
         params=distribution["parameters"],
@@ -159,8 +169,17 @@ def generate_data():
 
     n_partitions = distribution["parameters"]["n_partitions"]
 
+    for t, p in trans:
+        if "active" in p and not p["active"]:
+            continue
+        XX, YY, PP, distr_map = t.run(
+            params=p,
+            XX=XX,
+            YY=YY,
+            PP=PP,
+            distr_map=distr_map,
+        )
 
-    
     PXX = to3d(XX)
 
     if len(XX) > 4000:
@@ -197,10 +216,17 @@ def save_data():
     data_generator = data.get('data_generator')
     distribution = data.get('distribution')
     partitioner = data.get('partitioner')
+    transformers = data.get('transformers', [])
 
     dg = load_module_from_directory('data_generators', data_generator["name"])
     dist = load_module_from_directory('distributions', distribution["name"])
     part = load_module_from_directory('partitioners', partitioner["name"])
+    
+    trans = [
+        (load_module_from_directory('transformers', t["name"]), t["parameters"])
+        for t in transformers
+    ]
+
 
     XX, YY = dg.run(
         params=data_generator["parameters"],
@@ -230,6 +256,17 @@ def save_data():
 
     n_partitions = distribution["parameters"]["n_partitions"]
 
+    for t, p in trans:
+        if "active" in p and not p["active"]:
+            continue
+
+        XX, YY, PP, distr_map = t.run(
+            params=p,
+            XX=XX,
+            YY=YY,
+            PP=PP,
+            distr_map=distr_map,
+        )
 
     save = {
         "XX": XX,
@@ -242,8 +279,6 @@ def save_data():
     }
 
     save_path = os.path.join(DATA_FOLDER, filename)
-
-    # use numpy to save the data
     np.savez_compressed(save_path, **save)
     return jsonify({'status': 'success', 'filename': filename})
 
@@ -443,6 +478,10 @@ def rerun_pipeline(pipeline_id):
 def get_pipeline_log(pipeline_id):
     try:
         log = PIP_MANAGER.get_pipeline_log(pipeline_id)
+        log[
+            'config'
+        ] = PIP_MANAGER.get_pipeline_config(pipeline_id)
+
     except Exception as e:
         import traceback
         traceback.print_exc()

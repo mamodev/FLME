@@ -29,12 +29,6 @@ function hashConfig(config: any): string {
   return Math.abs(hash).toString(36); // Convert to base36 for shorter string
 }
 
-// Interface for transformer with its parameters
-interface TransformerWithParams {
-  module: Module;
-  params: Record<string, any>;
-}
-
 type GeneratorContextType = {
   // Module data (never null since config is loaded first)
   dataGenerator: Module;
@@ -43,7 +37,6 @@ type GeneratorContextType = {
   distributionParams: Record<string, any>;
   partitioner: Module;
   partitionerParams: Record<string, any>;
-  transformers: TransformerWithParams[];
 
   // Setters
   setDataGenerator: (module: Module) => void;
@@ -58,14 +51,6 @@ type GeneratorContextType = {
   setPartitionerParams: React.Dispatch<
     React.SetStateAction<Record<string, any>>
   >;
-
-  // Transformer operations
-  addTransformer: (module: Module) => void;
-  removeTransformer: (index: number) => void;
-  updateTransformerParams: (index: number, params: Record<string, any>) => void;
-  setTransformerModule: (index: number, module: Module) => void;
-  moveTransformerUp: (index: number) => void;
-  moveTransformerDown: (index: number) => void;
 
   // File save
   fileSave: string;
@@ -112,7 +97,7 @@ function generateDefaultParameters(module: Module): Record<string, any> {
 interface GeneratorProviderProps {
   children: ReactNode;
 }
-
+// eyJkYXRhX2dlbmVyYXRv
 // Helper to load cached data safely
 function loadFromCache<T>(configHash: string, key: string, defaultValue: T): T {
   try {
@@ -251,34 +236,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     );
   });
 
-  // Helper function to restore transformers from cache
-  const restoreTransformersFromCache = useCallback(() => {
-    const cachedTransformers = loadFromCache<any[]>(configHash, 'transformers', []);
-    
-    // Validate and restore each transformer
-    return cachedTransformers.map(item => {
-      // Find the module by name in the config
-      const module = config.transformers.find(m => m.name === item.module.name);
-      if (!module) {
-        // If module not found, use the first transformer as fallback
-        return {
-          module: config.transformers[0],
-          params: generateDefaultParameters(config.transformers[0])
-        };
-      }
-      
-      return {
-        module,
-        params: item.params
-      };
-    });
-  }, [config, configHash]);
-
-  // Initialize transformers state
-  const [transformers, setTransformersInternal] = useState<TransformerWithParams[]>(() => {
-    return restoreTransformersFromCache();
-  });
-
   const [fileSave, setFileSaveInternal] = useState<string>(() => {
     return loadFromCache(configHash, 'fileSave', 'data');
   });
@@ -308,7 +265,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
         distributionParams,
         partitionerName: partitioner.name,
         partitionerParams,
-        transformers,
         fileSave,
       };
 
@@ -325,7 +281,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     distributionParams,
     partitioner,
     partitionerParams,
-    transformers,
     fileSave,
   ]);
 
@@ -337,7 +292,7 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     debouncedSaveToCache();
     return () => {
       // Flush any pending saves on unmount
-      debouncedSaveToCache.flush();
+      debouncedSaveToCache();
     };
   }, [
     debouncedSaveToCache,
@@ -347,7 +302,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     distributionParams,
     partitioner,
     partitionerParams,
-    transformers,
     fileSave,
   ]);
 
@@ -409,65 +363,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     setPartitionerParamsInternal(newValue);
   };
 
-  // Transformer operations
-  const addTransformer = (module: Module) => {
-    setTransformersInternal((prev) => [
-      ...prev,
-      { module, params: generateDefaultParameters(module) },
-    ]);
-  };
-
-  const removeTransformer = (index: number) => {
-    setTransformersInternal((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const updateTransformerParams = (index: number, params: Record<string, any>) => {
-    setTransformersInternal((prev) => {
-      const newTransformers = [...prev];
-      if (index >= 0 && index < newTransformers.length) {
-        newTransformers[index] = { ...newTransformers[index], params };
-      }
-      return newTransformers;
-    });
-  };
-
-  // New function to switch the module of an existing transformer
-  const setTransformerModule = (index: number, module: Module) => {
-    setTransformersInternal((prev) => {
-      const newTransformers = [...prev];
-      if (index >= 0 && index < newTransformers.length) {
-        // Replace the module and reset parameters to defaults for the new module
-        newTransformers[index] = { 
-          module, 
-          params: generateDefaultParameters(module) 
-        };
-      }
-      return newTransformers;
-    });
-  };
-
-  const moveTransformerUp = (index: number) => {
-    if (index <= 0) return; // Can't move up if already at the top
-    setTransformersInternal((prev) => {
-      const newTransformers = [...prev];
-      const temp = newTransformers[index];
-      newTransformers[index] = newTransformers[index - 1];
-      newTransformers[index - 1] = temp;
-      return newTransformers;
-    });
-  };
-
-  const moveTransformerDown = (index: number) => {
-    setTransformersInternal((prev) => {
-      if (index >= prev.length - 1) return prev; // Can't move down if already at the bottom
-      const newTransformers = [...prev];
-      const temp = newTransformers[index];
-      newTransformers[index] = newTransformers[index + 1];
-      newTransformers[index + 1] = temp;
-      return newTransformers;
-    });
-  };
-
   const setFileSave = (newValue: React.SetStateAction<string>) => {
     setFileSaveInternal(newValue);
   };
@@ -486,10 +381,8 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
         name: partitioner.name,
         parameters: partitionerParams,
       },
-      transformers: transformers.map(t => ({
-        name: t.module.name,
-        parameters: t.params
-      })),
+      
+      transformers: [],
     };
 
     generate.mutate(request);
@@ -509,10 +402,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
         name: partitioner.name,
         parameters: partitionerParams,
       },
-      transformers: transformers.map(t => ({
-        name: t.module.name,
-        parameters: t.params
-      })),
       file_name: fileSave,
     };
 
@@ -528,7 +417,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     distributionParams,
     partitioner,
     partitionerParams,
-    transformers,
 
     // Setters
     setDataGenerator,
@@ -537,14 +425,6 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     setDistributionParams,
     setPartitioner,
     setPartitionerParams,
-
-    // Transformer operations
-    addTransformer,
-    removeTransformer,
-    updateTransformerParams,
-    setTransformerModule,
-    moveTransformerUp,
-    moveTransformerDown,
 
     // File save
     fileSave,

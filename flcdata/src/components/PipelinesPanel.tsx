@@ -124,13 +124,10 @@ export function PipelinesPanel() {
         deleteFn.mutate(row.id);
       });
     }
-  }
+  };
 
   const sorted_pipelines = [...pipelines.data].sort((a, b) => {
-    return (
-      b.last_status_change -
-      a.last_status_change
-    );
+    return b.last_status_change - a.last_status_change;
   });
 
   return (
@@ -139,8 +136,6 @@ export function PipelinesPanel() {
         <Typography variant="h5">Pipelines</Typography>
 
         <Stack direction="row" spacing={2}>
-         
-
           <Button
             startIcon={<ReplayOutlined />}
             onClick={() => pipelines.refetch()}
@@ -153,9 +148,9 @@ export function PipelinesPanel() {
             color="error"
             startIcon={<Delete />}
             onClick={handleDeleteAll}
-            >
-                Delete All
-            </Button>
+          >
+            Delete All
+          </Button>
         </Stack>
       </Stack>
       <DataGrid
@@ -191,6 +186,7 @@ function Logs({ id }: { id: string }) {
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)}>
           <Tab label="Stdout" />
           <Tab label="Stderr" />
+          <Tab label="Config" />
         </Tabs>
 
         <IconButton
@@ -228,6 +224,12 @@ function Logs({ id }: { id: string }) {
               </Typography>
             );
           })}
+
+        {tabIndex === 2 && (
+          <Typography>
+            <pre>{logs.data?.config ?? ""}</pre>
+          </Typography>
+        )}
       </Stack>
     </Stack>
   );

@@ -78,6 +78,13 @@ class PipelineManager():
             status = "RUNNING"
 
         return status, last_mod_time
+    
+    def get_pipeline_config(self, id):
+        assert isinstance(id, str), "Pipeline id must be a string"
+        if id not in self.status:
+            raise Exception(f"Pipeline with id {id} not found")
+
+        return self.status[id]["config"]
 
     def list_pipelines(self):
         pipelines = []

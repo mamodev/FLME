@@ -6,6 +6,11 @@ def dirchlet_label_skew_map(n_classes, n_samples, n_partitions, beta=1.0, alpha=
     import numpy as np
 
     n_samples_per_class = n_samples // n_classes
+    n_samples_per_class_remainder = n_samples % n_classes
+    n_samples_per_class = [
+        n_samples_per_class + (1 if i < n_samples_per_class_remainder else 0)
+        for i in range(n_classes)
+    ]
     
     np.random.seed(seed)
     knowledge = np.random.dirichlet([beta] * n_partitions)
@@ -38,7 +43,7 @@ def dirchlet_label_skew_map(n_classes, n_samples, n_partitions, beta=1.0, alpha=
         not_assigned = 0
         for c in classes_iter:
             assigned_samples = sum(dir_weights[c, :])
-            remaining_samples = n_samples_per_class - assigned_samples
+            remaining_samples = n_samples_per_class[c] - assigned_samples
             assert remaining_samples >= 0
 
             if remaining_samples >= class_distr[c]:
@@ -56,18 +61,18 @@ def dirchlet_label_skew_map(n_classes, n_samples, n_partitions, beta=1.0, alpha=
         to_distribute = not_assigned
         while to_distribute > 0:
             # free in form of (class, free, original_prc)[]
-            free = [(j, n_samples_per_class - sum(dir_weights[j, :]), _class_distr[j]) for j in range(n_classes)]
+            free = [(j, n_samples_per_class[j] - sum(dir_weights[j, :]), _class_distr[j]) for j in range(n_classes)]
             
             # filter out classes that are already full
             free = [p for p in free if p[1] > 0]
 
             # previus probability distribution summed to 1 so we should recalculate partition proportions
-            psum = sum([p[2] for p in free])
-            free = [(c, int(f), p / psum) for c, f, p in free]
+            _psum = sum([p[2] for p in free])
+            free = [(c, int(f), p / _psum) for c, f, p in free]
 
             # now we just check to be sure that the sum of the probabilities is 1
             psum = sum([p[2] for p in free])
-            assert np.round(psum) == 1, f"something wrong with the distribution, psum should be 1 but is {np.round(psum)}"
+            assert np.round(psum) == 1, f"something wrong with the distribution, psum should be 1 but is {np.round(psum)} previous psum was {_psum}, to_distribute = {to_distribute}, free = {free}"
             
             cd = [(c, f, int(p * to_distribute)) for c, f, p in free]
             cd = [(c, f, n) for c, f, n in cd if n > 0]
@@ -82,7 +87,7 @@ def dirchlet_label_skew_map(n_classes, n_samples, n_partitions, beta=1.0, alpha=
                 dir_weights[c, part] += min(n, f)
 
             i += 1
-            assert i < 6, f"Something wrong with the distribution, i = {i} > 5 and to_distribute = {to_distribute}"
+            assert i < 10, f"Something wrong with the distribution, i = {i} > 5 and to_distribute = {to_distribute}"
 
     return dir_weights
 

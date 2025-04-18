@@ -44,6 +44,7 @@ type Config = {
     data_generators: Module[];
     distributions: Module[];
     partitioners: Module[];
+    transformers: Module[];
     plots: Module[];
 }
 

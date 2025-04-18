@@ -4,10 +4,13 @@ import { useDeleteSimulation, useSimList } from "../api/useSimList";
 import { Delete, ReplayOutlined, Science } from "@mui/icons-material";
 import { useSimMetrics } from "../api/useSimMetrics";
 import { PlotRenderer } from "./PlotRenderer";
+import { useQueryClient } from "@tanstack/react-query";
 
 
 
 export function SimulationAnalysis() {
+
+  const queryClient = useQueryClient();
 
   const  { data: _slist, refetch} = useSimList();
   const slist = _slist || [];
@@ -31,6 +34,7 @@ export function SimulationAnalysis() {
           </Typography>
           <IconButton onClick={() => {
             refetch();
+            queryClient.invalidateQueries({ queryKey: ["sim-metrics"] });
           }
           }>
             <ReplayOutlined/>

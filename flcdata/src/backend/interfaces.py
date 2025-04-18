@@ -129,6 +129,11 @@ class Module:
             "description": self.description,
             "parameters": {k: v.to_dict() for k, v in self.parameters.items()},
         }
+    
+class TransformerModule(Module):
+    def __init__(self, name: str, description: str, parameters: Parameters, fn):
+        super().__init__(name, description, parameters, fn)
+        self.parameters["active"] = BooleanParameter(True)
 
 class Config:
     """

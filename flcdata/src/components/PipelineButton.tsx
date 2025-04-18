@@ -131,9 +131,9 @@ export function PipelineButton(props: PipelineButtonProps) {
                     [key]: processArgs(value, props.variables || {}),
                 }
             }, {});
-            
+
             runPipeline.mutate({
-                temp_name: "pipeline",
+                temp_name: selectedTemplate.id, 
                 args: {
                     ...args,
                     ...props.args || {},
@@ -156,6 +156,16 @@ export function PipelineButton(props: PipelineButtonProps) {
             sx={{width: 300}}
             options={templates.map((template) => template.name)}
             renderInput={(params) => <TextField {...params}  />}
+            onChange={(e, value) => {
+                if(!_templates)
+                    return 
+
+                const template = _templates.find((template) => template.name === value);
+                if (template) {
+                    setSelectedTemplate(template);
+                    setTemplateParams(template.parameters);
+                } 
+            }}
         />
 
         <ButtonGroup>

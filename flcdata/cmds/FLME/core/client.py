@@ -4,7 +4,7 @@ from core.listener import Listener
 from protocol import rpc, tcp
 from utils import logs
 
-async def ClientTask(args, auth, __client):
+async def ClientTask(args, auth, __client, extra_args=None):
     try:
         listener_task = None
         r = None
@@ -14,7 +14,7 @@ async def ClientTask(args, auth, __client):
         ls = await Listener.new_listener(auth, args.host, args.port)
         listener_task = asyncio.create_task(ls.listen())
 
-        await __client(r, w, ls, args)
+        await __client(r, w, ls, args, extra_args)
 
     except asyncio.CancelledError:
         pass

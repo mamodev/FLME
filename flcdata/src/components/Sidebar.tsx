@@ -1,7 +1,8 @@
-import { VisibilityOff } from '@mui/icons-material';
+import { Add, ArrowDownward, ArrowUpward, Delete, Visibility, VisibilityOff, X } from '@mui/icons-material';
 import {
   Autocomplete,
   Button,
+  IconButton,
   Stack,
   TextField
 } from '@mui/material';
@@ -11,6 +12,10 @@ import { useConfigContext } from '../contexts/ConfigContext';
 import { useGeneratorContext } from '../contexts/GeneratorContext';
 import { useSidebarContext } from '../contexts/SidebarContext';
 import ModuleSelector from './ModuleSelector';
+import { ModuleRenderer } from './ModuleRenderer';
+import { Module } from '../backend/interfaces';
+import { update } from 'plotly.js';
+import { grey } from '@mui/material/colors';
 
 
 
@@ -57,12 +62,25 @@ const Sidebar: React.FC = () => {
     const dg = config.data_generators.find((dg) => dg.name === params.data_generator.name);
     const dist = config.distributions.find((dist) => dist.name === params.distribution.name);
     const part = config.partitioners.find((part) => part.name === params.partitioner.name);
-
+    
     if (!dg || !dist || !part) {
       alert("Error loading file");
       return;
     }
 
+    const transformers = params.transformers.map((t: any) => {
+      const module = config.transformers.find((m) => m.name === t.name);
+      if (!module) {
+        throw new Error(`Module ${t.module.name} not found`);
+      }
+
+      return {
+        module,
+        params: t.parameters,
+      };
+    });
+
+ 
     ctx.setDataGenerator(dg);
     ctx.setDistribution(dist);
     ctx.setPartitioner(part);
@@ -70,6 +88,12 @@ const Sidebar: React.FC = () => {
     ctx.setDataGeneratorParams(params.data_generator.parameters);
     ctx.setDistributionParams(params.distribution.parameters);
     ctx.setPartitionerParams(params.partitioner.parameters);
+
+    for (const transformer of transformers) {
+      ctx.addTransformer(transformer.module);
+      ctx.updateTransformerParams(ctx.transformers.length - 1, transformer.params);
+    }
+
   }
 
   return (
@@ -91,6 +115,7 @@ const Sidebar: React.FC = () => {
       <ModuleSelector category="data_generator" />
       <ModuleSelector category="distribution" />
       <ModuleSelector category="partitioner" />
+      <Transformers/>
 
       <Button
         size='small'
@@ -170,5 +195,122 @@ const Sidebar: React.FC = () => {
     </Stack>
   );
 };
+
+
+function Transformers() {
+  const ctx = useGeneratorContext();
+  const {transformers} = useConfigContext();
+
+  return <>
+
+  {
+    ctx.transformers.map((transformer, i) => {
+      return <Transformer key={i} idx={i}/>
+    })
+  }
+
+  <Button startIcon={<Add/>} size='small' variant="outlined"
+    onClick={() => {
+      ctx.addTransformer(transformers[0]);
+    }}
+  >
+     Transformer
+  </Button>
+  
+  </>
+}
+
+type TransformerProps = {
+  idx: number;
+}
+
+function Transformer({idx}: TransformerProps) {
+
+  const ctx = useGeneratorContext();
+  const {transformers} = useConfigContext();
+
+  const [show, setShow] = React.useState(false);
+
+  return <Stack>
+
+    <Stack direction="row" spacing={1} alignItems="center">
+
+    <Stack sx={{
+          "& .MuiSvgIcon-root": {
+            fontSize: 18,
+            cursor: "pointer",
+            color: grey[500],
+            "&.disabled": {
+              color: grey[300],
+              cursor: "not-allowed",
+            },
+            "&:hover": {
+              color: "primary.main",
+            }
+          }
+        }}>
+          <ArrowUpward
+            className={idx === 0 ? "disabled" : ""}
+          onClick={() => {
+            ctx.moveTransformerUp(idx);
+          }}/>
+          <ArrowDownward  
+            className={idx === ctx.transformers.length - 1 ? "disabled" : ""}
+          onClick={() => {
+            ctx.moveTransformerDown(idx);
+          }}/>
+        </Stack>
+
+
+        <IconButton size="small" onClick={() => {
+          setShow(p => !p);
+        }}>
+
+          {show ? <VisibilityOff sx={{fontSize: 18}}/> : <Visibility sx={{fontSize: 18}}/>}
+        </IconButton>
+          
+   
+
+      <Autocomplete
+      fullWidth 
+          size="small"
+          disableClearable
+          value={ctx.transformers[idx].module}
+          options={transformers}
+          getOptionLabel={(option: Module) => option.name}
+          renderInput={(params) => <TextField {...params} />}
+          isOptionEqualToValue={(option: Module, value: Module) => 
+            option.name === value.name
+          }
+          onChange={(_, newValue: Module | null) => {
+            if (newValue) {
+              ctx.setTransformerModule(idx, newValue);
+              // ctx.updateTransformerParams(idx, newValue);
+            }
+          }}
+        />
+
+<IconButton size="small" onClick={() => {
+      if (confirm("Are you sure you want to delete this transformer?")) {
+        ctx.removeTransformer(idx);
+      }
+    }}>
+      <Delete sx={{fontSize: 18}}/>
+    </IconButton>
+
+      </Stack>
+
+
+    {show &&
+    <ModuleRenderer module={ctx.transformers[idx].module}
+      parameters={ctx.transformers[idx].params}
+      onChange={(params) => {
+        ctx.updateTransformerParams(idx, params);
+      }}
+      />
+    }
+
+  </Stack>
+}
 
 export default Sidebar;
