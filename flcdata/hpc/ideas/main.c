@@ -11,8 +11,9 @@
 #include <sys/mman.h>   // shm_open, shm_unlink
 #include <stdint.h>     // uint32_t
 #include <stdbool.h>
-
+#include <netdb.h>
 #include <pthread.h>   // pthread_create, pthread_join
+
 
 // Network
 #include <sys/socket.h>
@@ -872,11 +873,15 @@ int train_queue_advance() {
         ctp_msg.model_offset = (uint64_t)(model_ptr - SHM.globals_ptr);
         ctp_msg.results_offset = (uint64_t)(result_ptr - SHM.results_ptr);
         ctp_msg.model_size = model_size;
+
         ctp_msg.data_offset = train_msg->data_offset;
         ctp_msg.data_shape.dim = 2;
         ctp_msg.data_shape.shape[0] = train_msg->data_size / sizeof(float) / 100; //TODO: get real shape from dataset header
         ctp_msg.data_shape.shape[1] = 100; //TODO: get real shape from dataset header
 
+        ctp_msg.targets_offset = train_msg->targets_offset;
+        ctp_msg.targets_shape.dim = 1;
+        ctp_msg.targets_shape.shape[0] = train_msg->targets_size / sizeof(uint64_t);
 
         ctp_msg.ephochs = train_msg->ephochs;
         ctp_msg.batch_size = train_msg->batch_size;
@@ -885,11 +890,6 @@ int train_queue_advance() {
         ctp_msg.weight_decay = train_msg->weight_decay;
         ctp_msg.shuffle = train_msg->shuffle;
 
-
-        ctp_msg.targets_offset = train_msg->targets_offset;
-        
-        ctp_msg.targets_shape.dim = 1;
-        ctp_msg.targets_shape.shape[0] = train_msg->targets_size / sizeof(uint64_t);
 
         // printf("Starting training for client %u, partition %u: hash_id = %lu, model_version = %d\n",
         //        train_msg->client_id, train_msg->partition_id, id, train_msg->model_version);

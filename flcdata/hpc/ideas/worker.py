@@ -1,30 +1,31 @@
+import os
+import sys
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+#!/usr/bin/env python3
+import signal
 import mmap
+import posix_ipc
 import numpy as np
 import gc
 import struct
 import torch
-import psutil
 
 import sys
+import os
 import argparse
-from preprocessors.flcdata import Model
+from lib.flcdata import Model
 import traceback
-import stat
-import posix_ipc
-import threading
-from queue import Queue
 
-def senderThread(queue, mq_out):
-    while True:
-        try:
-            data = queue.get()
-            if data is None:
-                break
-            
-            mq_out.send(data)
-        except Exception as e:
-            print(f"Python: error sending data to queue: {e}")
-            break
+def signal_handler(signum, frame):
+    # print(f"Python: signal {signum} received, exiting")
+    pass
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGQUIT, signal_handler)
 
 __CLEANUP_FUNCS__ = []
 def cleanup():
@@ -47,11 +48,31 @@ def safe_mmap(fd, size, prot):
     __CLEANUP_FUNCS__.append((lambda: mm.close(), f"mmap::close fd={fd}"))
     return mm
 
-def safe_mqueue(name, *args):
-    mq = posix_ipc.MessageQueue(name, *args)
+def safe_mqueue(name):
+    mq = posix_ipc.MessageQueue(name)
     __CLEANUP_FUNCS__.append((lambda: mq.close(), f"mqueue::close name={name}"))
     return mq
 
+# struct ptc_msg {
+#     uint32_t id;
+#     int32_t err_code;
+# };
+
+# struct ctp_msg {
+#     uint32_t id;
+
+#     uint64_t model_offset;
+#     uint64_t dataset_offset;
+#     uint64_t results_offset;
+
+#     uint32_t model_size;
+#     uint32_t partition;
+#     uint32_t partition_offset;
+#     uint32_t partition_size;
+# };
+
+
+# def CustomDataLoader(data, targets, batch_size, shuffle):
 class CustomDataLoader:
     def __init__(self, data, targets, batch_size, shuffle):
         self.data = data
@@ -74,6 +95,7 @@ class CustomDataLoader:
                 batch_data = self.data[i:i+self.batch_size]
                 batch_targets = self.targets[i:i+self.batch_size]
                 yield batch_data, batch_targets
+
 
 def compute(mm_models, mm_dataset, mm_results,
                 model_offset,
@@ -110,7 +132,6 @@ def compute(mm_models, mm_dataset, mm_results,
         layers.append((key, shape))
 
 
-
     boffset = mm_results.tell()
     shm_layers_offset = boffset - result_offset
     for i in range(num_layers):
@@ -127,19 +148,12 @@ def compute(mm_models, mm_dataset, mm_results,
         model[layers[i][0]] = torch.from_numpy(data)
         del data
 
-    # print(f"Python: model loaded!")
-
     mm_dataset.seek(0)
-    dataset_size = struct.unpack("I", mm_dataset.read(4))[0] + 4
+    dataset_size = struct.unpack("I", mm_dataset.read(4))[0]
     npartitions = struct.unpack("I", mm_dataset.read(4))[0]
     nfeatures = struct.unpack("I", mm_dataset.read(4))[0]
     nclasses = struct.unpack("I", mm_dataset.read(4))[0]
 
-    assert data_shape[0] == targets_shape[0], f"Python: data_shape[0] != targets_shape[0] ({data_shape[0]} != {targets_shape[0]})"
-    assert data_offset + np.prod(data_shape) * 4 <= dataset_size, f"Python: data_offset + np.prod(data_shape) * 4 > dataset_size ({data_offset} + {np.prod(data_shape) * 4} > {dataset_size})"
-
-
-    # print(data_shape, targets_shape)
     data = np.frombuffer(
         mm_dataset,
         dtype=np.float32,
@@ -147,7 +161,6 @@ def compute(mm_models, mm_dataset, mm_results,
         offset=data_offset
     )
 
-    assert targets_offset + np.prod(targets_shape) * 8 <= dataset_size, f"Python: targets_offset + np.prod(targets_shape) * 8 > dataset_size ({targets_offset} + {np.prod(targets_shape) * 8} > {dataset_size})"
 
     targets = np.frombuffer(
         mm_dataset,
@@ -156,14 +169,11 @@ def compute(mm_models, mm_dataset, mm_results,
         offset=targets_offset
     )
 
-
     data = data.reshape(data_shape)
     targets = targets.reshape(targets_shape)
 
     tensor_data = None
     tensor_targets = None
-
-    # print(f"Python: Dataset loaded!")
 
     # print(f"Python: nfeatures = {nfeatures}, nclasses = {nclasses}")
     net = Model(insize=nfeatures, outsize=nclasses)
@@ -198,7 +208,6 @@ def compute(mm_models, mm_dataset, mm_results,
     
     criterion = torch.nn.CrossEntropyLoss()
 
-    # print(f"Python: training model with {hyperparameters['ephocs']} epochs, batch size {hyperparameters['batch_size']}, nsamples {len(tensor_data)})")
     for epoch in range(hyperparameters["ephocs"]):
         for batch_data, batch_targets in loader:
             optimizer.zero_grad()
@@ -231,16 +240,8 @@ def compute(mm_models, mm_dataset, mm_results,
     #     accuracy = 100 * correct / total
     #     print(f"Python: Accuracy of the model on the test data: {accuracy:.2f}%")
 
-
-sender_thread = None
-sender_queue = None
-
 def main():
-    global sender_thread
-    global sender_queue
-    print("Python: starting worker")
     p = argparse.ArgumentParser(description="POSIX MQ worker")
-    p.add_argument("--device",    required=True, help="device to use")
     p.add_argument("--in-queue",  required=True, help="name of input queue")
     p.add_argument("--out-queue", required=True, help="name of output queue")
     
@@ -254,26 +255,6 @@ def main():
 
     args = p.parse_args()
 
-    if args.device.startswith("cpu"):
-        split = args.device.split(":")
-        if len(split) > 2:
-            affinity = split[2]
-            if "-" in affinity:
-                affinity = affinity.split("-")
-                assert len(affinity) == 2, f"Python: invalid CPU affinity {affinity} use cpu:0:0->1"
-                from_cpu = int(affinity[0])
-                to_cpu = int(affinity[1])
-                affinity = list(range(from_cpu, to_cpu+1))
-            else:
-                affinity = affinity.split(",")
-
-            p = psutil.Process()
-            p.cpu_affinity([int(x) for x in affinity])
-            torch.set_num_threads(len(affinity))
-            torch.set_num_interop_threads(len(affinity))
-            # print(f"Python: set CPU affinity to {affinity}")
-
-    # print(f"Python: using device {args.device}")
     IN_QUEUE   = args.in_queue
     OUT_QUEUE  = args.out_queue
     IN_FMT = "<QQQIQI16IQI16IIIfff?"
@@ -283,11 +264,8 @@ def main():
     OUT_SIZE = struct.calcsize(OUT_FMT)
 
     try:
-        
         mq_in  = safe_mqueue(IN_QUEUE)
         mq_out = safe_mqueue(OUT_QUEUE)
-        print(f"Python: initialized queues {IN_QUEUE} {OUT_QUEUE}")
-
         shm_models = safe_shared_memory(args.shm_models, args.shm_models_size)
         shm_dataset = safe_shared_memory(args.shm_dataset, args.shm_dataset_size)
         shm_results = safe_shared_memory(args.shm_results, args.shm_results_size)
@@ -298,13 +276,8 @@ def main():
     except Exception as e:
         print(f"Python: error opening queues or shared memory: {e}")
         cleanup()
-        sys.exit(1)          
+        sys.exit(1)                
 
-
-    sender_queue = Queue()
-    sender_thread = threading.Thread(target=senderThread, args=(sender_queue, mq_out))
-    sender_thread.start()
-    # print(f"Python: Initialized queues and shared memory")      
 
     while True:
         # print(f"Python: waiting on {IN_QUEUE} (fmt={IN_FMT})")
@@ -358,8 +331,8 @@ def main():
         }
 
 
-        # print(f'Python: tshape_len = {targets_shape_len}, targets_shape = {targets_shape}')
-        # print(f'Python: dshape_len = {data_shape_len}, data_shape = {data_shape}')
+        # print(f'tshape_len = {targets_shape_len}, targets_shape = {targets_shape}')
+        # print(f'dshape_len = {data_shape_len}, data_shape = {data_shape}')
 
         error = None
 
@@ -385,9 +358,8 @@ def main():
             print(f"Python: error: {type(e)}: {e}")
             traceback.print_exc()
 
-        # print(f"Python: sending response id={id}, error={error}")
         resp_msg = struct.pack(OUT_FMT, id, 0 if not error else -1, model_offset, result_offset)
-        sender_queue.put(resp_msg)
+        mq_out.send(resp_msg, priority=0)
         # print(f"Python: sent id={id}, err_code={0 if not error else -1}")
 
 
@@ -398,10 +370,6 @@ if __name__ == "__main__":
     except Exception as e:
         if type(e).__name__ != "SignalError":
             print(f"Python: error: {type(e)}: {e}")
-
-    if sender_thread is not None:
-        sender_queue.put(None)
-        sender_thread.join()
 
     cleanup()
     sys.exit(0)

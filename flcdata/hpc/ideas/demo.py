@@ -44,7 +44,6 @@ for i in range(n_layers):
 
     layer_shapes.append((key, shape))
 
-Pth
 model_header_len = buff.tell()
 base_offset = buff.tell()
 layers = []
@@ -508,6 +507,8 @@ try:
     file_writer_thread.start()
     asyncio.run(main(file_writer_queue))
     print("Simulation finished.")
+
+    
 
 except KeyboardInterrupt:
     print("Simulation interrupted.")
