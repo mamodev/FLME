@@ -5,6 +5,7 @@ const domain = window.location.hostname.split(":")[0]
 
 // export const baseUrl = "http://localhost:5555/api/"
 export const baseUrl = `http://${domain}:5555/api/`
+console.log("baseUrl", baseUrl)
 
 export function apiurl(...paths: string[]): string {
     return baseUrl + paths.join("/")
