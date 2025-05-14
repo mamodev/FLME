@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiurl } from "./backend";
 
-type SimulationMetric = {
+export type SimulationMetric = {
     version: number;
     accuracy: number;
     groups: {

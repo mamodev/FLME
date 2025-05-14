@@ -20,20 +20,15 @@ function IntParameterRenderer(props: IntParameterProps) {
   const { value, onChange, label } = props;
   const [expression, setExpression] = React.useState(String(value));
 
+
+  React.useEffect(() => {
+    setExpression(String(value));
+  }, [value]);
+
+  
   const handleExpressionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newExpression = e.target.value;
     setExpression(newExpression);
-
-    try {
-      const newValue = evaluate(newExpression);
-      if (typeof newValue === "number" && !isNaN(newValue)) {
-        const integerValue = Math.floor(newValue); // Crucial: Convert to integer
-        onChange(integerValue);
-      }
-    } catch (error) {
-      // Optionally handle the error, e.g., show an error message to the user
-      console.error("Invalid expression:", error);
-    }
   };
 
   return (
@@ -77,6 +72,10 @@ type FloatParameterProps = {
 function FloatParameterRenderer(props: FloatParameterProps) {
   const { value, onChange, label } = props;
   const [expression, setExpression] = React.useState(String(value));
+
+  React.useEffect(() => {
+    setExpression(String(value));
+  }, [value]);
 
   const handleExpressionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newExpression = e.target.value;
@@ -169,6 +168,7 @@ function EnumParameterRenderer(props: EnumParameterProps) {
       </Typography>
 
       <Autocomplete
+      fullWidth 
         size="small"
         options={options}
         value={value}
@@ -178,7 +178,7 @@ function EnumParameterRenderer(props: EnumParameterProps) {
           }
         }}
         renderInput={(params) => (
-          <TextField {...params} label={label} variant="outlined" />
+          <TextField {...params} variant="outlined" />
         )}
         />
     </Stack>

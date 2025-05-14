@@ -139,8 +139,20 @@ class PipelineManager():
         # check if not running
         status = self.get_pipeline_status(id)
         if status[0] == "RUNNING":
-            return False
-        
+            # force kill the process
+            pid = self.status[id]["pid"]
+            try:
+                os.kill(pid, 9)
+            except Exception as e:
+                print(f"Error killing process {pid}: {e}")
+                return False
+
+        tm_start_wait = time.time()
+        while self.get_pipeline_status(id)[0] == "RUNNING":
+            if time.time() - tm_start_wait > 10:
+                return False
+            time.sleep(0.1)
+
         # remove all files
         for ext in ["stdout", "stderr", "status", "pid"]:
             try:

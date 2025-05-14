@@ -1,4 +1,4 @@
-/* http://meyerweb.com/eric/tools/css/reset/ 
+/* /* http://meyerweb.com/eric/tools/css/reset/ 
    v2.0 | 20110126
    License: none (public domain)
 */
@@ -53,8 +53,11 @@ body,
 #app {
   height: 100vh;
   width: 100vw;
-}
+} */
 
+
+
+/* NODE STYLING (WIP) */
 .text-updater-node {
 	height: 50px;
 	border: 1px solid #eee;
@@ -68,3 +71,208 @@ body,
 	color: #777;
 	font-size: 12px;
 }
+
+
+
+/* MARKDOWN STYLING */
+
+
+/* Base styles for the container */
+.markdown-root {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+	  sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+	line-height: 1.6; /* Restore readable line height */
+	color: #24292e; /* Default text color (GitHub's default) */
+  }
+  
+  /* Headings */
+  .markdown-root h1,
+  .markdown-root h2,
+  .markdown-root h3,
+  .markdown-root h4,
+  .markdown-root h5,
+  .markdown-root h6 {
+	margin-top: 24px;
+	margin-bottom: 16px;
+	font-weight: 600;
+	line-height: 1.25;
+  }
+  
+  .markdown-root h1 {
+	font-size: 2em; /* Example size */
+	padding-bottom: 0.3em;
+	border-bottom: 1px solid #eaecef; /* Subtle separator */
+  }
+  
+  .markdown-root h2 {
+	font-size: 1.5em; /* Example size */
+	padding-bottom: 0.3em;
+	border-bottom: 1px solid #eaecef; /* Subtle separator */
+  }
+  
+  .markdown-root h3 {
+	font-size: 1.25em; /* Example size */
+  }
+  
+  .markdown-root h4 {
+	font-size: 1em; /* Example size */
+  }
+  
+  .markdown-root h5 {
+	font-size: 0.875em; /* Example size */
+  }
+  
+  .markdown-root h6 {
+	font-size: 0.85em; /* Example size */
+	color: #6a737d; /* Often muted */
+  }
+  
+  /* Paragraphs */
+  .markdown-root p {
+	margin-bottom: 16px; /* Spacing after paragraphs */
+  }
+  
+  /* Links */
+  .markdown-root a {
+	color: #0366d6; /* Standard link blue */
+	text-decoration: none; /* Remove underline by default */
+  }
+  .markdown-root a:hover {
+	text-decoration: underline; /* Underline on hover */
+  }
+  
+  /* Lists */
+  .markdown-root ul,
+  .markdown-root ol {
+	margin-top: 0;
+	margin-bottom: 16px;
+	padding-left: 2em; /* Indentation for lists */
+  }
+  
+  .markdown-root ul {
+	list-style-type: disc; /* Default bullet */
+  }
+  .markdown-root ol {
+	list-style-type: decimal; /* Default numbers */
+  }
+  
+  .markdown-root ul ul,
+  .markdown-root ul ol,
+  .markdown-root ol ol,
+  .markdown-root ol ul {
+	margin-top: 0;
+	margin-bottom: 0; /* No extra margin for nested lists */
+  }
+  
+  .markdown-root li {
+	margin-bottom: 0.25em; /* Slight spacing between list items */
+  }
+  
+  .markdown-root li > p {
+	margin-top: 16px; /* Spacing if paragraph is inside list item */
+  }
+  
+  /* Blockquotes */
+  .markdown-root blockquote {
+	margin: 0 0 16px 0;
+	padding: 0 1em;
+	color: #6a737d; /* Muted color */
+	border-left: 0.25em solid #dfe2e5; /* Standard blockquote style */
+  }
+  .markdown-root blockquote > :first-child {
+	margin-top: 0;
+  }
+  .markdown-root blockquote > :last-child {
+	margin-bottom: 0;
+  }
+  
+  /* Code */
+  .markdown-root code {
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier,
+	  monospace;
+	font-size: 85%; /* Slightly smaller than base text */
+	padding: 0.2em 0.4em;
+	margin: 0;
+	background-color: rgba(27, 31, 35, 0.05); /* Subtle background */
+	border-radius: 3px;
+  }
+  
+  /* Code blocks (inside pre) */
+  .markdown-root pre {
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier,
+	  monospace;
+	font-size: 85%;
+	line-height: 1.45;
+	display: block; /* Make it block-level */
+	padding: 16px;
+	margin-top: 0;
+	margin-bottom: 16px;
+	overflow: auto; /* Add scrollbars if content overflows */
+	background-color: #f6f8fa; /* Slightly different background for blocks */
+	border-radius: 3px;
+	word-wrap: normal; /* Prevent wrapping long lines */
+  }
+  
+  .markdown-root pre code {
+	padding: 0;
+	margin: 0;
+	font-size: 100%; /* Inherit pre's font size */
+	background-color: transparent; /* No background for code inside pre */
+	border: 0;
+	display: inline; /* Override potential block styles */
+	max-width: auto;
+	overflow: visible;
+	line-height: inherit;
+	word-wrap: normal; /* Ensure it doesn't wrap */
+  }
+  
+  /* Emphasis */
+  .markdown-root em {
+	font-style: italic; /* Restore italic */
+  }
+  .markdown-root strong {
+	font-weight: 600; /* Restore bold (often bolder than default bold) */
+  }
+  
+  /* Horizontal Rule */
+  .markdown-root hr {
+	height: 0.25em;
+	padding: 0;
+	margin: 24px 0;
+	background-color: #e1e4e8;
+	border: 0;
+  }
+  
+  /* Tables (Basic Styling) */
+  .markdown-root table {
+	border-collapse: collapse; /* Remove spacing between cells */
+	margin-top: 0;
+	margin-bottom: 16px;
+	display: block; /* Allow overflow scrolling */
+	width: 100%;
+	overflow: auto;
+  }
+  .markdown-root th,
+  .markdown-root td {
+	padding: 6px 13px;
+	border: 1px solid #dfe2e5;
+  }
+  .markdown-root th {
+	font-weight: 600;
+	text-align: left; /* Default alignment */
+  }
+  .markdown-root tr {
+	background-color: #fff;
+	border-top: 1px solid #c6cbd1;
+  }
+  .markdown-root tr:nth-child(2n) {
+	background-color: #f6f8fa; /* Zebra striping */
+  }
+  
+  /* Images */
+  .markdown-root img {
+	max-width: 100%; /* Prevent images from overflowing container */
+	box-sizing: content-box;
+	background-color: #fff;
+  }
+  

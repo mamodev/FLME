@@ -1,7 +1,5 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { apiurl } from "./backend";
-
-
 
 type ModuleConfig = {
     name: string;
@@ -15,7 +13,17 @@ export type GenerateRequest = {
     transformers: ModuleConfig[];
 }
 
-export function useGenerate(callback: (data: any) => void) {
+export type GenerateResponse = {
+    'X': number[][];
+    'Y': number[],
+    'PP': number[],
+    'CTP': number[][];
+    'n_classes': number,
+    'n_samples': number,
+    "n_partitions": number,
+}
+
+export function useGenerate(callback: (data: GenerateResponse) => void) {
     return useMutation({
         onSuccess: (data) => {
             callback(data)
@@ -35,7 +43,7 @@ export function useGenerate(callback: (data: any) => void) {
                 throw new Error('Network response was not ok')
             }
 
-            return response.json()
+            return response.json() as unknown as GenerateResponse
         }
     })
 }

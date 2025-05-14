@@ -11,9 +11,14 @@ parser.add_argument("--output_dir", type=str, help="Path to the output folder wh
 
 parser.add_argument("--train_split", type=float, default=0.8, help="Proportion of the dataset to include in the training split.")
 parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling the dataset.")
+parser.add_argument("--ignore-if-exists", action="store_true", help="if split files already exist, do nothing.")
 
 args = parser.parse_args()
 
+
+if args.ignore_if_exists and os.path.exists(args.output_dir):
+    print(f"Output directory {args.output_dir} already exists. Exiting without doing anything.")
+    sys.exit(0)
 
 np.random.seed(args.seed)
 
@@ -31,6 +36,8 @@ def __load_npz__(ds_folder):
         "n_samples": data["n_samples"],
         "n_partitions": data["n_partitions"],
     }
+
+
 
 raw_dataset = __load_npz__(args.input_file)
 

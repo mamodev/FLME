@@ -1,4 +1,4 @@
-import { Add, ArrowDownward, ArrowUpward, Delete, Visibility, VisibilityOff, X } from '@mui/icons-material';
+import { Add, ArrowDownward, ArrowUpward, Delete, Visibility, VisibilityOff } from '@mui/icons-material';
 import {
   Autocomplete,
   Button,
@@ -6,18 +6,15 @@ import {
   Stack,
   TextField
 } from '@mui/material';
+import { grey } from '@mui/material/colors';
 import React from 'react';
 import { useSavedFiles } from '../api/useSave';
+import { Module } from '../backend/interfaces';
 import { useConfigContext } from '../contexts/ConfigContext';
 import { useGeneratorContext } from '../contexts/GeneratorContext';
 import { useSidebarContext } from '../contexts/SidebarContext';
-import ModuleSelector from './ModuleSelector';
 import { ModuleRenderer } from './ModuleRenderer';
-import { Module } from '../backend/interfaces';
-import { update } from 'plotly.js';
-import { grey } from '@mui/material/colors';
-
-
+import ModuleSelector from './ModuleSelector';
 
 const Sidebar: React.FC = () => {
   const {

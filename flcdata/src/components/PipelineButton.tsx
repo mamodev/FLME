@@ -4,39 +4,6 @@ import React from "react";
 import { Settings, StartOutlined } from "@mui/icons-material";
 
 
-// function processArg(args: string, ds_name: string) {
-//     // replace __DATASET__ with the dataset name
-//     // replace __IRAND(MIN, MAX) with a random integer between MIN and MAX
-//     // replace __FRAND(MIN, MAX) with a random float between MIN and MAX
-
-//     const regex = /__IRAND\((\d+), (\d+)\)/g;
-//     const regex2 = /__FRAND\((\d+), (\d+)\)/g;
-//     const regex3 = /__DATASET__/g;
-
-//     const randomInt = (min: number, max: number) => {
-//         return Math.floor(Math.random() * (max - min + 1)) + min;
-//     }
-
-//     const randomFloat = (min: number, max: number) => {
-//         return Math.random() * (max - min) + min;
-//     }
-
-//     args = args.replace(regex, (match, p1, p2) => {
-//         const min = parseInt(p1);
-//         const max = parseInt(p2);
-//         return randomInt(min, max).toString();
-//     });
-    
-//     args = args.replace(regex2, (match, p1, p2) => {
-//         const min = parseFloat(p1);
-//         const max = parseFloat(p2);
-//         return randomFloat(min, max).toString();
-//     });
-
-//     args = args.replace(regex3, ds_name);
-//     return args;
-// }
-
 
 function processArgs(args: string, variables: Record<string, string>) {
     // replace __{VAR}__ with the variable value

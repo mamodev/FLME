@@ -9,6 +9,7 @@ import argparse
 import torch    
 import json
 from lib.flcdata import Model, FLCDataset
+import math
 
 class MemoryDataLoader:
     def __init__(self, data, targets, batch_size=1024, shuffle=False):
@@ -24,7 +25,7 @@ class MemoryDataLoader:
         return len(self.data)
 
 
-def dataset_to_device(dataset, device, batch_size=1024, shuffle=False):
+def dataset_to_device(dataset, device, batch_size=4096, shuffle=False):
     assert dataset.data.device != device, f"Dataset already on device: {dataset.data.device}"
     assert dataset.targets.device != device, f"Targets already on device: {dataset.targets.device}"
 
@@ -34,88 +35,112 @@ def dataset_to_device(dataset, device, batch_size=1024, shuffle=False):
     return MemoryDataLoader(dataset.data, dataset.targets, batch_size=batch_size, shuffle=shuffle)
 
 def test(net, loader):
-    if len(loader) == 0:
+    total = len(loader.data)
+
+    if total == 0:
         print("=="*20)
         print("Empty loader")
         print("=="*20)
-        return 0
+        return -1
 
     net.eval()
     with torch.no_grad():
         correct = 0
-        total = len(loader.data)
-
+        t = 0
 
         for data, target in loader:
             output = net(data)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
+            t += len(data)
+
+        
+        assert t == total, f"Total {total} != {t}"
 
         return correct / total
 
+def sort_of_equal(a, b):
+    return abs(a - b) < 0.001
 
-if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Analyze the data")
-    parser.add_argument("--sim-dir", type=str, required=True)
-    parser.add_argument("--dataset-dir", type=str, required=True)
-    parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
+def analyze(simdir, datasetdir, seed=0):
+    print(f"Analyzing models in {simdir} with dataset {datasetdir} and seed {seed}")
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
 
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-
-    if not os.path.exists(args.sim_dir):
-        raise ValueError(f"Path '{args.sim_dir}' does not exist")
+    if not os.path.exists(simdir):
+        raise ValueError(f"Path '{simdir}' does not exist")
     
-    if not os.path.isdir(args.sim_dir):
-        raise ValueError(f"Path '{args.sim_dir}' is not a directory")
+    if not os.path.isdir(simdir):
+        raise ValueError(f"Path '{simdir}' is not a directory")
 
     versions = []
-    for file in os.listdir(args.sim_dir):
+    for file in os.listdir(simdir):
         if file.endswith(".model"):
             version = int(file.split(".")[0])
             versions.append(version)
 
     versions = sorted(versions)
     metrics = []
-    
+
     print(f"Found {len(versions)} models ({min(versions)} -> {max(versions)})")
 
-    dss = FLCDataset.LoadGroups(ds_folder=args.dataset_dir, train=False)
-    ds = FLCDataset.LoadMerged(ds_folder=args.dataset_dir, train=False)
-    net = Model(insize=ds.n_features, outsize=ds.n_classes)
+    dss = FLCDataset.LoadGroups(ds_folder=datasetdir, train=False)
 
-    device = torch.device("cuda")
-    loader = dataset_to_device(ds, device)
+    # ds = FLCDataset.LoadMerged(ds_folder=datasetdir, train=False)
+    # assert len(ds) == sum([len(ds) for ds in dss]), "Merged dataset size does not match the sum of group sizes"
+    # print(f"Loaded {len(ds)} samples from {len(dss)} groups")
+
+
+    net = Model(insize=dss[0].n_features, outsize=dss[0].n_classes)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     loaders = [dataset_to_device(ds, device) for ds in dss]
 
     for v in versions:
-        model_path = f"{args.sim_dir}/{v}.model"
-        metrics_path = f"{args.sim_dir}/{v}.metrics"
+        model_path = f"{simdir}/{v}.model"
+        metrics_path = f"{simdir}/{v}.metrics"
         if os.path.exists(metrics_path):
             metrics.append(json.load(open(metrics_path)))
             continue
 
         _to = torch.load(model_path, weights_only=False)
-        model = _to["model"]
-        __metrics = _to["metrics"]
+
+        model = _to
+        __metrics = {
+            "contributors": [],
+        }
+
+        # check if is a dict
+        if isinstance(_to, dict) and "model" in _to:
+            model = _to["model"]
+            if "metrics" in _to:
+                __metrics = _to["metrics"]
 
         net.load_state_dict(model)
         net.to(device)
 
-        accuracy = test(net, loader)
+        # accuracy = test(net, loader)
 
-
-        metric = {"version": v, "accuracy": accuracy, "groups": {},
+        metric = {"version": v, "accuracy": 0, "groups": {},
                 "contributors": __metrics["contributors"],
         }
 
 
+        acc2 = 0
+        for _ds, _l in zip(dss, loaders):
+            acc = test(net, _l)
+            metric["groups"][_ds.dex] = acc
+            acc2 += acc 
 
-        for ds, loader in zip(dss, loaders):
-            accuracy = test(net, loader)
-            metric["groups"][ds.dex] = accuracy
+        acc2 /= len(dss)
+
+        metric["accuracy"] = acc2
+
+        # if not sort_of_equal(acc2, accuracy):
+        #     print(f"Accuracy mismatch: {accuracy} != {acc2}")
+        #     raise ValueError(f"Accuracy mismatch: {accuracy} != {acc2}")
+
 
         metrics.append(metric)
         json.dump(metric, open(metrics_path,
@@ -123,3 +148,16 @@ if __name__ == "__main__":
 
 
     print(f"{__file__} - Finished analyzing models")
+    
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyze the data")
+    parser.add_argument("--sim-dir", type=str, required=True)
+    parser.add_argument("--dataset-dir", type=str, required=True)
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
+    analyze(args.sim_dir, args.dataset_dir, args.seed)
+
+   
+
+

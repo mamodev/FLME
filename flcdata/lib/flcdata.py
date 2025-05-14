@@ -58,8 +58,8 @@ class FLCDataset(Dataset):
     def LoadSize(ds_folder):
         data = FLCDataset.__load_npz__(ds_folder, True)
         return (
-            data["XX"].shape[1],
-            data["n_classes"],
+            int(data["XX"].shape[1]),
+            int(data["n_classes"]),
         )
     
 from torch import nn

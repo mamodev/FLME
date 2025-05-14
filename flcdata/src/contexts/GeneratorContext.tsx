@@ -9,8 +9,9 @@ import React, {
 } from 'react';
 import { useConfigContext } from './ConfigContext';
 import { Module } from '../backend/interfaces';
-import { GenerateRequest, useGenerate } from '../api/useGenerate';
+import { GenerateRequest, GenerateResponse, useGenerate } from '../api/useGenerate';
 import { SaveRequest, useSave } from '../api/useSave';
+import { generateDefaultParameters } from '../utils/generatord';
 
 // Cache keys
 const CACHE_VERSION_KEY = 'generator_cache_version';
@@ -76,7 +77,7 @@ type GeneratorContextType = {
   handleSave: () => Promise<void> | void;
 
   // Generated data
-  generated: any;
+  generated: GenerateResponse | null;
 
   // Loading states
   isGenerating: boolean;
@@ -95,19 +96,6 @@ export const useGeneratorContext = (): GeneratorContextType => {
   return context;
 };
 
-function generateDefaultParameters(module: Module): Record<string, any> {
-  const parameters: Record<string, any> = {};
-
-  for (const [key, parameter] of Object.entries(module.parameters)) {
-    if ('default' in parameter) {
-      parameters[key] = parameter.default;
-    } else {
-      parameters[key] = null;
-    }
-  }
-
-  return parameters;
-}
 
 interface GeneratorProviderProps {
   children: ReactNode;
@@ -283,7 +271,7 @@ export const GeneratorProvider: React.FC<GeneratorProviderProps> = ({
     return loadFromCache(configHash, 'fileSave', 'data');
   });
 
-  const [generated, setGeneratedInternal] = useState<any>(() => {
+  const [generated, setGeneratedInternal] = useState<GenerateResponse | null>(() => {
     try {
       const cacheVersion = localStorage.getItem(CACHE_VERSION_KEY);
       if (cacheVersion === configHash) {

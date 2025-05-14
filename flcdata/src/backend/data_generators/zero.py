@@ -10,8 +10,9 @@ def generate(params):
     n_samples_per_class = n_samples // n_classes
     n_samples = n_samples_per_class * n_classes
 
-    xx = np.zeros((n_samples, n_features))
-    yy = np.zeros((n_samples))
+    # xx = np.ones((n_samples, n_features))
+    xx = np.random.rand(n_samples, n_features)
+    yy = np.zeros((n_samples), dtype=int)
 
     for i in range(n_classes):
         yy[i*n_samples_per_class:(i+1)*n_samples_per_class] = i

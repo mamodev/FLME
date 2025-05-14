@@ -4,14 +4,16 @@ import {
     Tab,
     Tabs
 } from "@mui/material";
+
 import React, { memo } from "react";
 import { PlotRenderer } from "./PlotRenderer";
 import { TabContent } from "./Tabs";
+import { GenerateResponse } from "../api/useGenerate";
 
 
 type InnerProps = {
     selectedTab: string;
-    data: any;
+    data: GenerateResponse
 };
 
 
@@ -19,8 +21,6 @@ const Inner = memo(function (props: InnerProps) {
     const { selectedTab, data } = props;
 
     return <>
-    
-    
             <TabContent current={selectedTab} value={"3D Scatter"}>
             <PlotRenderer
             data={Array.from({ length: data.n_classes }, (_, c) => {
@@ -59,14 +59,39 @@ const Inner = memo(function (props: InnerProps) {
         </TabContent>
 
         <TabContent current={selectedTab} value={"Distribution"}>
-            <PlotRenderer data={class_per_part_hist(data)} />
-            <PlotRenderer data={part_per_class_hist(data)} />
+            <PlotRenderer data={class_per_part_hist(data)} layout={ {
+                barmode: 'group', 
+                yaxis: {
+                  title: 'Partition counts',
+                  side: 'left'
+                },
+                yaxis2: {
+                  title: 'Total per class',
+                  overlaying: 'y',        
+                  side: 'right'
+                }
+              }}/>
+              
+            <PlotRenderer data={part_per_class_hist(data)} 
+              layout={{
+                barmode: 'group', 
+                yaxis: {
+                  title: 'Partition counts',
+                  side: 'left'
+                },
+                yaxis2: {
+                  title: 'Total per class',
+                  overlaying: 'y',        
+                  side: 'right'
+                }
+              }}
+            />
         </TabContent>
     </>
 });
 
 type VisualizationPanelProps = {
-  generated: any;
+  generated: GenerateResponse | null;
 }
 
 export function VisualizationPanel(props: VisualizationPanelProps) {
@@ -133,67 +158,92 @@ function palette(n: number) {
   return colors[n % colors.length];
 }
 
-function class_per_part_hist(data: any) {
+function part_per_class_hist(data: GenerateResponse) {
   const n_classes = data.n_classes;
   const n_partitions = data.n_partitions;
 
-  const X = data.X;
-  const Y = data.Y;
-  const PP = data.PP;
 
-
-  const hist = Array.from({ length: n_partitions }, () =>
-    Array(n_classes).fill(0)
+  const hist = Array.from({ length: n_partitions }, (_, p) =>
+    Array.from({ length: n_classes }, (_, c) => 
+      data.CTP[c][p] 
+    ) 
   );
 
-  for (let i = 0; i < X.length; i++) {
-    const p = PP[i];
-    const c = Y[i];
-    hist[p][c] += 1;
+
+  const traces : Plotly.Data[] = [];
+
+  const xx = Array.from({ length: n_classes }, (_, c) => c);
+
+  for (let p = 0; p < n_partitions; p++) {
+    traces.push({
+      x: xx,
+      y: hist[p],
+      type: "bar",
+      name: `Partition ${p}`,
+      yaxis: "y2",
+      marker: {
+        color: palette(p) 
+      },
+    });
   }
 
-  const traces = hist.map((h, i) => {
-    return {
-      x: h,
+  for (let c = 0; c < n_classes; c++) {
+    traces.push({
+      x: [c],
+      y: [hist.map(h => h[c]).reduce((sum, count) => sum + count, 0)],
       type: "bar",
-      name: `Partition ${i}`,
+      name: `Total per class ${c}`,
+      yaxis: "y",
       marker: {
-        color: palette(i),
+        color: palette(c) + "50",
       },
-    };
-  });
+    });
+  }
 
+    
   return traces;
 }
 
-function part_per_class_hist(data: any) {
+function class_per_part_hist(data: GenerateResponse) {
   const n_classes = data.n_classes;
   const n_partitions = data.n_partitions;
 
-  const X = data.X;
-  const Y = data.Y;
-  const PP = data.PP;
-
-  const hist = Array.from({ length: n_classes }, () =>
-    Array(n_partitions).fill(0)
+  const hist = Array.from({ length: n_classes }, (_, c) =>
+    Array.from({ length: n_partitions }, (_, p) => 
+      data.CTP[c][p] 
+    ) 
   );
 
-  for (let i = 0; i < X.length; i++) {
-    const p = PP[i];
-    const c = Y[i];
-    hist[c][p] += 1;
+  const traces : Plotly.Data[] = [];
+
+  const xx = Array.from({ length: n_partitions }, (_, p) => p);
+
+  for (let p = 0; p < n_classes; p++) {
+    traces.push({
+      x: xx,
+      y: hist[p],
+      type: "bar",
+      name: `Class ${p}`,
+      yaxis: "y2",
+      marker: {
+        color: palette(p) 
+      },
+    });
   }
 
-  const traces = hist.map((h, i) => {
-    return {
-      x: h,
+  for (let c = 0; c < n_partitions; c++) {
+    traces.push({
+      x: [c],
+      y: [hist.map(h => h[c]).reduce((sum, count) => sum + count, 0)],
       type: "bar",
-      name: `Class ${i}`,
+      name: `Total per partition ${c}`,
+      yaxis: "y",
       marker: {
-        color: palette(i),
+        color: palette(c) + "50",
       },
-    };
-  });
+    });
+  }
+
 
   return traces;
 }
