@@ -602,4 +602,5 @@ if __name__ == '__main__':
     os.makedirs(SIM_FOLDER, exist_ok=True)
     os.makedirs(PIP_TEMPLATES_FOLDER, exist_ok=True)
 
-    app.run(debug=True, threaded=True, port=5555)
+    app.run(host='0.0.0.0',
+        debug=True, threaded=True, port=5555)
