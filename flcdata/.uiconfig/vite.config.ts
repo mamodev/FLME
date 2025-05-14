@@ -10,7 +10,11 @@ export default defineConfig({
   build: {
     outDir: '../.app-dist',
     emptyOutDir: true,
-    sourcemap: true,
+    minify: false,
+    target: 'esnext',
+    cssCodeSplit: false,
+
+    sourcemap: false,
     rollupOptions: {
       input: {
         main: resolve(__dirname, '../src/index.html'),
@@ -20,15 +24,15 @@ export default defineConfig({
         chunkFileNames: 'index.js',
         assetFileNames: '[name][extname]',
       },
-      plugins: [
-        nodePolyfills({
-          globals: {
-            Buffer: true,
-            process: true,
-          },
-          protocolImports: true,
-        }),
-      ],
+      // plugins: [
+      //   nodePolyfills({
+      //     globals: {
+      //       Buffer: true,
+      //       process: true,
+      //     },
+      //     protocolImports: true,
+      //   }),
+      // ],
     },
   },
 
