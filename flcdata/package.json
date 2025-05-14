@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "start": "concurrently \"vite --config .uiconfig/vite.config.ts\" \"python src/server.py\"",
-        "runpreview": "concurrently \"vite preview --config .uiconfig/vite.config.ts\" \"python src/server.py\"",
+        "runpreview": "concurrently \"vite preview --host --config .uiconfig/vite.config.ts\" \"python src/server.py\"",
         "dev": "vite --config .uiconfig/vite.config.ts",
         "build": "NODE_OPTIONS=\"--max-old-space-size=28672 --max-semi-space-size=4096 --optimize_for_size --stack-size=4096\" tsc --noEmitOnError false  && vite build --config .uiconfig/vite.config.ts",
         "preview": "vite preview --host --config .uiconfig/vite.config.ts",
