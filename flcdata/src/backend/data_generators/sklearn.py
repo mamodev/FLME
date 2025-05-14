@@ -1,4 +1,5 @@
 from backend.interfaces import Module, IntParameter, FloatParameter, StringParameter, BooleanParameter, EnumParameter
+import math
 
 def sklearn(n_classes, n_samples, n_features=3,
             n_clusters_per_class=1,
@@ -13,7 +14,7 @@ def sklearn(n_classes, n_samples, n_features=3,
     assert n_classes >= 2, "n_classes must be greater than 2"
 
     XX, YY = make_classification(
-        n_samples=n_samples + 100,
+        n_samples=n_samples + max(math.floor(n_samples * 0.2), 500),
         n_features=n_features,
         
         n_informative=n_informative,
@@ -30,14 +31,20 @@ def sklearn(n_classes, n_samples, n_features=3,
     balanced_YY = []
     samples_per_class = n_samples // n_classes
 
+    assert samples_per_class * n_classes == n_samples, "n_samples must be divisible by n_classes"
+
+
+
     for c in range(n_classes):
         indices = np.where(YY == c)[0]
         
         if len(indices) > samples_per_class:
-            print(f"Class {c} has {len(indices)} samples, cutting to {samples_per_class}")
+            # print(f"Class {c} has {len(indices)} samples, cutting to {samples_per_class}")
             selected_indices = indices[:samples_per_class]
+        elif len(indices) < samples_per_class:
+            raise ValueError(f"Class {c} has {len(indices)} samples, but we need {samples_per_class}")
         else:
-            print(f"Class {c} has {len(indices)} samples, keeping all")
+            # print(f"Class {c} has {len(indices)} samples, keeping all")
             selected_indices = indices
         
         balanced_XX.append(XX[selected_indices])
@@ -46,6 +53,8 @@ def sklearn(n_classes, n_samples, n_features=3,
     XX = np.vstack(balanced_XX)
     YY = np.concatenate(balanced_YY)
 
+
+    print(f"==DONE==", flush=True)
     return XX, YY
 
 

@@ -16,6 +16,7 @@ export function TabContent(props: {children: React.ReactNode | React.ReactNode[]
       sx={{
         position: "relative",
         boxSizing: "border-box",
+        overflow: 'auto'
       }}
   
     >

@@ -148,9 +148,10 @@ class ModelRepository:
         folder: str, ignore_exists=True, window_size=10
     ) -> "ModelRepository":
         # check if folder exists
-        if not os.path.exists(folder):
+        if os.path.exists(folder):
             if not ignore_exists:
-                raise Exception(f"Folder {folder} does not exist")
+                raise Exception(f"Folder {folder} exist")
+        else: 
             os.makedirs(folder)
 
         # check if folder is a directory

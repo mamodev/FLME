@@ -71,6 +71,9 @@ export function useSavedFiles() {
     })
 }
 
+const useDatasets = useSavedFiles
+export { useDatasets }
+
 type DataResponse = {
     X: [number, number, number][];
     Y: number[];

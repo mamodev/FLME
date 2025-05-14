@@ -2,17 +2,18 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-import umap
+# from sklearn.manifold import TSNE
+# import umap
 
 from typing import List, Dict, Any
 import os
 import importlib
+import numpy as np
+
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins='*')  # Replace with your frontend's origin(s)
 
-import numpy as np
 
 
 def load_modules_from_directory(directory_name):
@@ -90,24 +91,6 @@ def load_module_from_directory(directory_name, module_name):
     else:
         raise ImportError("'generator' variable not found in module")
 
-def to3d(XX):
-    if len(XX[0]) == 3:
-        return XX
-    # tnse = TSNE(
-    #     n_components=3,
-    #     perplexity=30,
-    #     n_iter=1000,
-    #     random_state=42
-    # )
-    # XX_3d = tnse.fit_transform(XX)
-    pca = PCA(n_components=3)
-    XX_3d = pca.fit_transform(XX)
-    
-    # mp = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1) # Adjust n_neighbors and min_dist
-    # XX_3d = mp.fit_transform(XX_3d)
-    
-    return XX_3d
-    
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """
@@ -123,19 +106,37 @@ def get_config():
     return jsonify(config)
 
 
-@app.route('/api/generate', methods=['POST'])
-def generate_data():
-    """
-    Endpoint to generate data using the specified data generator and parameters.
-    Expects a JSON payload with 'generator' and 'parameters'.
-    """
-    data = request.json
+# ======================================================
+#
+#  @generator
+#  API relted to data generation.....
+#
+# ======================================================
 
-    data_generator = data.get('data_generator')
-    distribution = data.get('distribution')
-    partitioner = data.get('partitioner')
-    transformers = data.get('transformers', [])
+DATA_FOLDER = ".data"
 
+def to3d(XX):
+    if len(XX[0]) == 3:
+        return XX
+
+    pca = PCA(n_components=3)
+    XX_3d = pca.fit_transform(XX)
+    
+    # tnse = TSNE(
+    #     n_components=3,
+    #     perplexity=30,
+    #     n_iter=1000,
+    #     random_state=42
+    # )
+    # XX_3d = tnse.fit_transform(XX)
+
+    # mp = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1) # Adjust n_neighbors and min_dist
+    # XX_3d = mp.fit_transform(XX_3d)
+    
+    return XX_3d
+    
+
+def __generate(data_generator, distribution, partitioner, transformers):
     dg = load_module_from_directory('data_generators', data_generator["name"])
     dist = load_module_from_directory('distributions', distribution["name"])
     part = load_module_from_directory('partitioners', partitioner["name"])
@@ -151,7 +152,7 @@ def generate_data():
     n_samples = data_generator["parameters"].get("n_samples", len(XX))
     n_classes = data_generator["parameters"].get("n_classes", len(set(YY)))
 
-    assert len(XX) == n_samples, "n_samples must be equal to the length of XX"
+    assert len(XX) == n_samples, f"n_samples must be equal to the length of XX but got {len(XX)} wich is not equal to {n_samples}"
     assert len(set(YY)) <= n_classes, "n_classes must be greater than or equal to the number of unique labels in YY"
 
     distr_map = dist.run(
@@ -172,6 +173,7 @@ def generate_data():
     for t, p in trans:
         if "active" in p and not p["active"]:
             continue
+
         XX, YY, PP, distr_map = t.run(
             params=p,
             XX=XX,
@@ -180,7 +182,15 @@ def generate_data():
             distr_map=distr_map,
         )
 
+    return XX, YY, PP, n_classes, n_samples, n_partitions
+
+def __downsample(XX, YY, PP, n_classes, n_samples, n_partitions):
     PXX = to3d(XX)
+    CTP = np.zeros((n_classes, n_partitions))
+    for i in range(len(YY)):
+        c = YY[i]
+        p = PP[i]
+        CTP[c][p] += 1
 
     if len(XX) > 4000:
         random_indices = np.random.choice(len(XX), 4000, replace=False)
@@ -189,84 +199,43 @@ def generate_data():
         PXX = PXX[random_indices]
         PP = PP[random_indices]
 
+    return PXX, YY, PP, CTP
+
+@app.route('/api/generate', methods=['POST'])
+def generate_data():
+    XX, YY, PP, n_classes, n_samples, n_partitions = __generate(
+        request.json.get('data_generator'),
+        request.json.get('distribution'),
+        request.json.get('partitioner'),
+        request.json.get('transformers', [])
+    )
+
+    PXX, YY, PP, CTP = __downsample(
+        XX, YY, PP, n_classes, n_samples, n_partitions
+    )
+    
     return jsonify({
         'X': PXX.tolist(),
         'Y': YY.tolist(),
         'PP': PP.tolist(),
+        'CTP': CTP.tolist(),
         'n_classes': n_classes,
         'n_samples': n_samples,
         "n_partitions": n_partitions,
     })
 
-
-DATA_FOLDER = ".data"
-SIM_FOLDER = ".simulations"
-
 @app.route('/api/save', methods=['POST'])
 def save_data():
-    """
-    Endpoint to save generated data to a specified file.
-    Expects a JSON payload with 'data' and 'filename'.
-    """
-    data = request.json
-    filename = data.get('file_name')
+    filename = request.json.get('file_name')
     if not filename:
-        filename = 'data.json'
+        return jsonify({"error": "Filename is required"}), 400
 
-    data_generator = data.get('data_generator')
-    distribution = data.get('distribution')
-    partitioner = data.get('partitioner')
-    transformers = data.get('transformers', [])
-
-    dg = load_module_from_directory('data_generators', data_generator["name"])
-    dist = load_module_from_directory('distributions', distribution["name"])
-    part = load_module_from_directory('partitioners', partitioner["name"])
-    
-    trans = [
-        (load_module_from_directory('transformers', t["name"]), t["parameters"])
-        for t in transformers
-    ]
-
-
-    XX, YY = dg.run(
-        params=data_generator["parameters"],
+    XX, YY, PP, n_classes, n_samples, n_partitions = __generate(
+        request.json.get('data_generator'),
+        request.json.get('distribution'),
+        request.json.get('partitioner'),
+        request.json.get('transformers', [])
     )
-
-    if len(XX) > 4000:
-        random_indices = np.random.choice(len(XX), 4000, replace=False)
-        XX = XX[random_indices]
-        YY = YY[random_indices]
-
-
-    n_samples = len(XX)
-    n_classes = len(set(YY))
-
-    distr_map = dist.run(
-        params=distribution["parameters"],
-        n_samples=n_samples,
-        n_classes=n_classes,
-    )
-
-    PP = part.run(
-        params=partitioner["parameters"],
-        X=XX,
-        Y=YY,
-        distr_map=distr_map,
-    )
-
-    n_partitions = distribution["parameters"]["n_partitions"]
-
-    for t, p in trans:
-        if "active" in p and not p["active"]:
-            continue
-
-        XX, YY, PP, distr_map = t.run(
-            params=p,
-            XX=XX,
-            YY=YY,
-            PP=PP,
-            distr_map=distr_map,
-        )
 
     save = {
         "XX": XX,
@@ -275,7 +244,7 @@ def save_data():
         "n_classes": n_classes,
         "n_samples": n_samples,
         "n_partitions": n_partitions,
-        "generation_params": data
+        "generation_params": request.json
     }
 
     save_path = os.path.join(DATA_FOLDER, filename)
@@ -314,9 +283,6 @@ def get_saved_files():
 
 @app.route('/api/data/<filename>', methods=['GET'])
 def get_data(filename):
-    """
-    Endpoint to retrieve data from a specified file.
-    """
     file_path = os.path.join(DATA_FOLDER, filename)
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
@@ -329,22 +295,16 @@ def get_data(filename):
     n_samples = data['n_samples'].item()
     n_classes = data['n_classes'].item()
     n_partitions = data['n_partitions'].item()
-
-    # Check if the data is too large
-    if len(XX) > 4000:
-        np.random.seed(42)
-        random_indices = np.random.choice(len(XX), 4000, replace=False)
-        XX = XX[random_indices]
-        YY = YY[random_indices]
-        PP = PP[random_indices]
-
-    # Convert to 3D
-    PXX = to3d(XX)
-
+   
+    PXX, YY, PP, CTP = __downsample(
+        XX, YY, PP, n_classes, n_samples, n_partitions
+    )
+    
     return jsonify({
         'X': PXX.tolist(),
         'Y': YY.tolist(),
         'PP': PP.tolist(),
+        "CTP": CTP.tolist(),
         'n_classes': n_classes,
         'n_samples': n_samples,
         "n_partitions": n_partitions,
@@ -352,15 +312,22 @@ def get_data(filename):
 
 @app.route('/api/data/<filename>', methods=['DELETE'])
 def delete_data(filename):
-    """
-    Endpoint to delete a specified file.
-    """
     file_path = os.path.join(DATA_FOLDER, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
         return jsonify({"status": "success", "message": "File deleted"}), 200
     else:
         return jsonify({"error": "File not found"}), 404
+
+
+# ======================================================
+#
+#  @simulation
+#  API relted to simulations.....
+#
+# ======================================================
+
+SIM_FOLDER = ".simulations"
 
 @app.route('/api/list-simulations', methods=['GET'])
 def list_simulations():
@@ -539,9 +506,100 @@ def get_pipeline_templates():
 
     return jsonify(templates)
 
+
+# Execute arbitrary code
+@app.route('/api/exec-python', methods=['POST'])
+def execute_code():
+    """
+    Endpoint to execute arbitrary code. Expects a JSON payload with 'code'.
+    """
+    data = request.json
+    code = data.get('code')
+    GLOBALS = data.get('globals', {})
+
+
+    def fn():
+        GLOBALS["response"] = None
+        exec(code, GLOBALS)
+        return GLOBALS["response"]
+
+    if not code:
+        return jsonify({"error": "No code provided"}), 400
+    try:
+        res = fn()
+        return jsonify({"status": "success", "result": res}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+from io import BytesIO
+from PIL import Image
+
+@app.route('/api/serve-static/<path:filename>', methods=['GET'])
+def serve_static(filename):
+    """
+    Endpoint to serve static files from the static folder.
+    """
+
+    # get query params
+    query_params = request.args.to_dict()
+    #w=int,h=int
+    # With image it enables to resize the image
+
+    h = query_params.get("h", None)
+    w = query_params.get("w", None) 
+
+    static_folder = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../"
+    )
+
+    file_path = os.path.join(static_folder, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": f"File {filename} not found in path {static_folder}"}), 404
+
+    with open(file_path, 'rb') as f:
+        content = f.read()
+
+    # Set the appropriate content type based on the file extension
+    if filename.endswith('.js'):
+        content_type = 'application/javascript'
+    elif filename.endswith('.css'):
+        content_type = 'text/css'
+    elif filename.endswith('.html'):
+        content_type = 'text/html'
+    elif filename.endswith('.json'):
+        content_type = 'application/json'
+    elif filename.endswith('.png'):
+        content_type = 'image/png'
+        img = Image.open(BytesIO(content))
+        if h and not w:
+            w = img.size[0] * (int(h) / img.size[1])
+        
+        elif w and not h:
+            h = img.size[1] * (int(w) / img.size[0])
+         
+        if h and w:
+            img.thumbnail((int(w), int(h)))
+        
+        img_io = BytesIO()
+        img.save(img_io, format='PNG')
+        img_io.seek(0)
+        content = img_io.getvalue()
+
+    elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+        content_type = 'image/jpeg'
+    else:
+        content_type = 'application/octet-stream'
+    
+    return content, 200, {
+        'Content-Type': content_type,
+        'Content-Disposition': f'inline; filename={filename}'
+    }
+
+
 if __name__ == '__main__':
     os.makedirs(DATA_FOLDER, exist_ok=True)
     os.makedirs(SIM_FOLDER, exist_ok=True)
     os.makedirs(PIP_TEMPLATES_FOLDER, exist_ok=True)
 
-    app.run(debug=True, threaded=True, port=5000)
+    app.run(debug=True, threaded=True, port=5555)
