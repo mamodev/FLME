@@ -4,10 +4,13 @@ import { apiurl } from "./backend";
 import type { Config } from "../backend/interfaces";
 
 export function useConfig() {
+    const url = apiurl('config')
+
     return useQuery({
         queryKey: ['config'],
         queryFn: async (ctx) => {
-            const response = await fetch(apiurl('config'), {
+            console.log('Fetching config from', url)
+            const response = await fetch(url, {
                 signal: ctx.signal,  
             })
 
