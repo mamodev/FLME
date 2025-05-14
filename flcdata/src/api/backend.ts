@@ -1,6 +1,10 @@
 import { useQuery } from "@tanstack/react-query"
 
-export const baseUrl = "http://localhost:5555/api/"
+// get current domain / ip address (Exclude port) and set as base url
+const domain = window.location.hostname.split(":")[0]
+
+// export const baseUrl = "http://localhost:5555/api/"
+export const baseUrl = `http://${domain}:5555/api/`
 
 export function apiurl(...paths: string[]): string {
     return baseUrl + paths.join("/")
