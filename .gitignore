@@ -8,7 +8,7 @@ __pycache__
 gdrive
 
 
-
+.app-dist
 .data
 .simulations
 .pipelines_logs
