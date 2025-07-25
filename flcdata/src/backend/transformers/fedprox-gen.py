@@ -49,10 +49,14 @@ def generate(params, XX, YY, PP, distr_map):
     nsamples = len(XX)
     IID = params["iid"]
 
-    for iii in range(100):
+
+    errored = False
+    MAX_RETRIES = 10
+    for iii in range(MAX_RETRIES):
         XX=[]
         YY=[]
         PP=[]
+        errored = False
         try:
             meanW = np.random.normal(0, alpha, npartitions)
             meanB = meanW
@@ -129,6 +133,7 @@ def generate(params, XX, YY, PP, distr_map):
                                 writeIdx += len(idx)
                         
                         if iterations > 500:
+                   
                             for c in range(nclasses):
                                 print(f"p: {p}, c: {c}, nsamples = {len(yy[yy == c])}/{distr_map[c][p]}", flush=True)
                             raise Exception("Too many iterations to generate balanced samples.")
@@ -151,6 +156,7 @@ def generate(params, XX, YY, PP, distr_map):
             return XX, YY, PP, distr_map
         
         except Exception as e:
+            errored = True
             print(f"Error: {e}", flush=True)
             print("Retrying...", flush=True)
             continue

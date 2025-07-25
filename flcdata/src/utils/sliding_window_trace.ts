@@ -2,46 +2,76 @@ import { PlotlyData } from "../contexts/PlotlyCtx";
 
 export interface SlidingTracesOpts {
   x: number[];
-  y: number[];
+  y: number[] | number[][];
   windowSize: number;
   bandFillColor?: string;
   label?: string;
   avg_color?: string;
   raw_color?: string;
   var_color?: string;
+  min_max_color?: string; // Color for the min-max band
 }
 
-/**
- * Compute sliding-window mean and std‐dev.
- */
+
+
+type SlidingWindowStats = {
+  xmids: number[];
+  means: number[];
+  stds: number[];
+  mins: number[];
+  maxs: number[];
+};
+
 function slidingStats(
   x: number[],
-  y: number[],
+  y: number[][] | number[],
   w: number
-): { xmids: number[]; means: number[]; stds: number[] } {
+): SlidingWindowStats{
   const N = y.length;
   if (w > N) {
     throw new Error("Window size must be ≤ data length");
   }
-  const cumsum1 = new Array<number>(N + 1).fill(0);
-  const cumsum2 = new Array<number>(N + 1).fill(0);
-  for (let i = 0; i < N; i++) {
-    cumsum1[i + 1] = cumsum1[i] + y[i];
-    cumsum2[i + 1] = cumsum2[i] + y[i] * y[i];
-  }
+
   const xmids: number[] = [];
   const means: number[] = [];
   const stds: number[] = [];
-  for (let i = 0; i <= N - w; i++) {
-    const sumY = cumsum1[i + w] - cumsum1[i];
-    const sumY2 = cumsum2[i + w] - cumsum2[i];
-    const μ = sumY / w;
-    const variance = sumY2 / w - μ * μ;
-    xmids.push((x[i] + x[i + w - 1]) / 2);
-    means.push(μ);
-    stds.push(Math.sqrt(Math.max(0, variance)));
+  const mins: number[] = [];
+  const maxs: number[] = [];
+
+
+  let cursor = 0;
+  while (cursor + w <= N) {
+    const _slice = y.slice(cursor, cursor + w);
+    xmids.push(
+      x[cursor + Math.floor(w / 2)]
+    );
+
+    const flat_slice = _slice.flat();
+
+    const mean = flat_slice.reduce((a, b) => a + b, 0) / flat_slice.length;
+    means.push(mean);
+
+    const variance =
+      flat_slice.reduce((acc, v) => acc + (v - mean) ** 2, 0) / flat_slice.length;
+    const std = Math.sqrt(Math.max(0, variance));
+    stds.push(std);
+
+    const min = Math.min(...flat_slice);
+    mins.push(min);
+
+    const max = Math.max(...flat_slice);
+    maxs.push(max);
+
+    cursor = cursor + Math.floor(w / 2);
   }
-  return { xmids, means, stds };
+
+  return {
+    xmids,
+    means,
+    stds,
+    mins,
+    maxs, 
+  };
 }
 
 
@@ -52,7 +82,9 @@ export function createSlidingWindowTraces(
   const {
     xmids,
     means,
-    stds
+    stds,
+    mins,
+    maxs,
   } = slidingStats(x, y, w);
 
   // Build the ±1σ band polygon
@@ -61,9 +93,15 @@ export function createSlidingWindowTraces(
   const xBand = xmids.concat(xmids.slice().reverse());
   const yBand = upper.concat(lower);
 
-  const var_color = opts.var_color || "rgba(200,50,50,0.3)";
+  const upperMinMax = maxs;
+  const lowerMinMax = mins.slice().reverse();
+  const xBandMinMax = xmids.concat(xmids.slice().reverse());
+  const yBandMinMax = upperMinMax.concat(lowerMinMax);
+
+  const var_color = opts.var_color || "rgba(200,50,50,0.5)";
   const raw_color = opts.raw_color || "rgba(0,100,200,0.5)";
   const avg_color = opts.avg_color || "rgba(0,100,200,1)";
+  const min_max_color = opts.min_max_color || "rgba(50,50,50,0.1)"; 
 
   const label = opts.label || "";
 
@@ -78,12 +116,27 @@ export function createSlidingWindowTraces(
     type: "scatter"
   };
 
+  const minMaxBand: Plotly.Data = {
+    x: xBandMinMax,
+    y: yBandMinMax,
+    fill: "toself",
+    fillcolor: min_max_color,
+    line: { color: "transparent" },
+    name: `${label} min - max`,
+    hoverinfo: "skip",
+    type: "scatter",
+  };
+
+
+
+
   const traceMean: Plotly.Data = {
     x: xmids,
     y: means,
     mode: "lines",
     line: {
         color: avg_color,
+        width: 3
     },
     // name: "Running mean",
     name: `${label} running mean (${w})`,
@@ -102,7 +155,7 @@ export function createSlidingWindowTraces(
     },
    };
 
-    return [originalTrace, traceBand, traceMean, ];
+    return [minMaxBand, originalTrace, traceBand, traceMean,  ];
 }
 
 
@@ -135,6 +188,8 @@ export function makeMeanStdevTraces(
   if (x.length !== y.length) {
     throw new Error("x and y must have the same length");
   }
+
+
 
   // compute means & standard deviations
   const means = y.map(arr => {

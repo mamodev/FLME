@@ -155,13 +155,13 @@ function Simulation({ name }: { name: string }) {
     {
       version: 0,
       accuracy: 0,
-      groups: {},
+      groups: {} as Record<string, number>,
     },
   ];
 
-  // const groups = React.useMemo(() => {
-  //   return Object.keys(metrics[0].groups);
-  // }, [metrics]);
+  const groups = React.useMemo(() => {
+    return Object.keys(metrics[0].groups);
+  }, [metrics]);
 
   // const avg = React.useMemo(() => {
   //   const avg = Array.from({ length: metrics.length }, () => 0);
@@ -176,16 +176,17 @@ function Simulation({ name }: { name: string }) {
   // }, [metrics]);
 
 
+
+
   const data = React.useMemo(() => {
     return metrics.length == 1 ? [] : [
       ...createSlidingWindowTraces({
+        label: "Accuracy",
         x: metrics.map((m) => m.version),
-        y: metrics.map((m) => m.accuracy),
-        windowSize: 20,
+        y: metrics.map((m) => groups.map((g) => m.groups[g])),
+        windowSize: 40,
         bandFillColor: "rgba(200,50,50,0.3)",
       }),
-
-   
       // {
       //   x: metrics.map((m) => m.version),
       //   y: metrics.map((m) => m.accuracy),
@@ -194,14 +195,16 @@ function Simulation({ name }: { name: string }) {
       //   name: "Accuracy",
       //   marker: { color: "blue" },
       // },
-      // ...groups.map((group) => ({
-      //   x: metrics.map((m) => m.version),
-      //   y: metrics.map((m) => m.groups[group]),
-      //   type: "scatter",
-      //   mode: "lines+markers",
-      //   visible: "legendonly",
-      //   name: group,
-      // })),
+      ...groups.map((group) => ({
+        x: metrics.map((m) => m.version),
+        y: metrics.map((m) => m.groups[group]),
+        type: "scatter",
+        // mode: "lines+markers",
+        visible: "legendonly",
+
+        opacity: 0.5,
+        name: group,
+      })),
       // {
       //   x: metrics.map((m) => m.version),
       //   y: avg,

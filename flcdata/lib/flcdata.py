@@ -77,6 +77,18 @@ class SimpleModel(nn.Module):
 
     def forward(self, x):
         return self.fc(x)
+
+class LogisticRegression(nn.Module):
+    def __init__(self, insize=2, outsize=8):
+        super(LogisticRegression, self).__init__()
+        self.linear = nn.Linear(insize, outsize)
+
+    def forward(self, x):
+        logits = self.linear(x)
+        log_probs = nn.LogSoftmax(dim=1)(logits)
+
+        return log_probs
+        # return logits
     
 class DeeperModel(nn.Module):
     def __init__(self, insize=2, outsize=8):
@@ -125,4 +137,4 @@ class VeryDeepModel(nn.Module):
         return self.fc(x)
     
 # Model = SimpleModel
-Model = SimpleModel
+Model = LogisticRegression

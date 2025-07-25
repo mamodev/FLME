@@ -126,6 +126,9 @@ class MemoryDataLoader:
         self.partition_data = self.data[self.start_idx:self.end_idx]
         self.partition_targets = self.targets[self.start_idx:self.end_idx]
 
+    def set_batch_size(self, batch_size):
+        self.batch_size = batch_size
+
     def __iter__(self):
         indices = list(range(len(self.partition_data)))
         if self.shuffle:
@@ -187,41 +190,45 @@ def deep_clone_sdict(state_dict):
 #     return cpu_model
 
 
-def train_model(net, model, train_loader, learning_rate=0.01):
+def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weight_decay):
     import cmds.FLME.protocol.protocol as protocol
 
     model = deep_clone_sdict(model)
     net.load_state_dict(model)
     
-    
-    ephocs = 15
-    lr = learning_rate
-    momentum = 0.1
-    optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=momentum)
+    optimizer = torch.optim.SGD(net.parameters(),  
+                                lr=learning_rate,
+                                momentum=momentum,
+                                weight_decay=weight_decay)
 
-    meta = protocol.ModelMeta(
-        momentum=momentum,
-        learning_rate=lr,
-        train_loss=0.1,
-        test_loss=0.2,
-        local_epoch=ephocs,
-        train_samples=len(train_loader), 
-    )
+    meta = {
+        "momentum": momentum,
+        "learning_rate": learning_rate,
+        "local_epoch": ephocs,
+        "weight_decay": weight_decay,
+        "train_samples": len(train_loader),
+        "train_loss": [],
+    }
     
     net.train()
     for e in range(ephocs):
+        train_loss = 0.0
         for i, (data, target) in enumerate(train_loader):
             optimizer.zero_grad()
             output = net(data)
             loss = functional.nll_loss(output, target)
             loss.backward()
             optimizer.step()
+            train_loss += loss.item() * data.size(0)
+        
+        train_loss /= len(train_loader)
+        meta["train_loss"].append(train_loss)
 
     return meta, deep_clone_sdict(net.state_dict())
 
 def aggregate_model(_mdl, updates):
     local_models = [
-        (upd, meta.train_samples)
+        (upd, meta['train_samples'])
         for meta, upd in updates
     ]
     
@@ -229,36 +236,19 @@ def aggregate_model(_mdl, updates):
 
     return model, {
             "contributors": [
-                {
-                    "meta": meta.to_dict(),
-                }
-                for meta, m in updates
+                meta for meta, model in updates
             ]
         }
-
-def lr_linear_interpolation_factory(min, max, num_steps):
-    def lr_linear_interpolation(step):
-        return min + (max - min) * (step / num_steps)
-    
-    return lr_linear_interpolation
 
 
 def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
 
     import types
-    from lib.flcdata import FLCDataset, SimpleModel
+    from lib.flcdata import FLCDataset, Model
     from cmds.FLME.core.repository import ModelRepository
     import logging
     import torch.utils.bottleneck as bottleneck
 
-
-    
-
-    lr_gen = lr_linear_interpolation_factory(
-        args.lr_range[0],
-        args.lr_range[1],
-        len(aggregations) - 1
-    )
    
     repo = ModelRepository.from_disk(repo_folder, ignore_exists=False, window_size=2)
 
@@ -275,8 +265,9 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     logger.info("Datasets loaded.")
     logger.info(f"Number of datasets: {len(train_dss)}")
     logger.info(f"Moving datasets to device...")
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     
     proportional_knowledge = "proportionalKnowledge" in sim and sim["proportionalKnowledge"]
     splt_per_partition = sim["client_per_partition"]
@@ -290,7 +281,7 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
             dataset_to_device(
                 partition_ds,
                 device,
-                batch_size=4096,
+                batch_size=1024,
                 shuffle=False,
                 n_partitions=splt_per_partition[pidx],
                 partition_idx=cidx,
@@ -305,7 +296,7 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
 
     next_agg = aggregations[0]
 
-    repo.put_model(SimpleModel(
+    repo.put_model(Model(
         insize=in_size,
         outsize=out_size,
     ).state_dict(), {
@@ -323,7 +314,7 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     
     
     tm_last_agg = time.perf_counter()
-    net = SimpleModel(
+    net = Model(
                 insize=in_size,
                 outsize=out_size,
             )
@@ -338,7 +329,6 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     }
     
     latest_model_version = 1
-    
     
     for t, events in enumerate(timeline):
         for event in events:
@@ -368,9 +358,28 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
                     del global_model_map[version]
 
                 del sparse_client_model_map[ckey]
-                
-                upd = train_model(net, model, data_loader, learning_rate=lr_gen(t))
-                updates.append(upd)
+
+
+                assert "train_params" in event, "Train parameters not found in event."
+                hyperparams = event['train_params']
+                opt = hyperparams['optimizer']['type']
+                assert opt == "sgd", f"Unsupported optimizer: {opt}. Only 'sgd' is supported."
+
+                bs = hyperparams['batch_size']
+                ephocs = hyperparams['ephocs']
+                lr = hyperparams['optimizer']['learning_rate']
+                momentum = hyperparams['optimizer'].get('momentum', 0.0)
+                weight_decay = hyperparams['optimizer'].get('weight_decay', 0.0)
+
+                data_loader.set_batch_size(bs)
+
+                meta, upd = train_model(net, model, data_loader, learning_rate=lr, ephocs=ephocs, momentum=momentum, weight_decay=weight_decay)
+
+                meta['base_version'] = version
+                meta['client'] = event['client']
+                meta['batch_size'] = bs
+
+                updates.append((meta, upd))
             else:
                 raise ValueError(f"Unknown event type: {event['type']}")
 
@@ -413,19 +422,6 @@ if __name__ == "__main__":
     parser.add_argument("--repo-folder", type=str, required=True, help="Path to the model repository folder")
     parser.add_argument("--nuke-repo", action="store_true", help="Delete the model repository before starting")
     
-    parser.add_argument(
-        "--lr-range",
-        type=float,  # Apply float conversion to each argument
-        nargs=2,     # Expect exactly 2 arguments following --lr-range
-        default=[0.01, 0.01], # Default can be a list or tuple
-        metavar=("LR_START", "LR_END"), # Optional: Improves help message
-        help="Learning rate range (start end) for the simulation"
-    )   
-
-    
-    parser.add_argument("--lr-interpolation", type=str, default="linear", help="Interpolation method for learning rate")
-    parser.add_argument("--lr-end-interpolation", type=int, default=0, help="End interpolation for learning rate")
-
     args = parser.parse_args()
 
     if args.nuke_repo:

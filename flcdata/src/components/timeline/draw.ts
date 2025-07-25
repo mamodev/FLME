@@ -109,8 +109,10 @@ export function precompute(timeline: ITimeline, sim: ISimulation): DrawPreComput
     throw new Error("No free offset available");
   }
 
-  for (let t = 0; t < timeline.length; t++) {
-    const evts = timeline[t];
+
+  
+  for (let t = 0; t < timeline.events.length; t++) {
+    const evts = timeline.events[t];
 
     evts.sort((a, b) => {
       if (a.type === "fetch") {
@@ -152,28 +154,12 @@ export function precompute(timeline: ITimeline, sim: ISimulation): DrawPreComput
     }
   } 
 
-  const aggregations: number[] = [];
-  let updates: IUpdate[] = [];
-  for (let t = 0; t < timeline.length; t++) {
-      const upds = timeline[t].filter((e) => e.type === "send").map((e) => ({
-          client: e.client,
-          tick: t
-      }));
-
-      if (upds.length > 0) {
-          updates.push(...upds);
-      }
-
-      if (sim.strategy(updates)) {
-        updates = [];
-        aggregations.push(t);
-      }
-  }
+  const aggregations: number[] = timeline.aggregations
 
   return {
     activities,
-    maxActivities
-      , aggregations
+    maxActivities, 
+    aggregations
   }
 
 }
@@ -181,7 +167,7 @@ export function precompute(timeline: ITimeline, sim: ISimulation): DrawPreComput
 export function draw(canvas: HTMLCanvasElement, timeline: ITimeline, sim: ISimulation,
   precomputed: DrawPreComputed,
   time_start=0,
-  time_end=timeline.length - 1,
+  time_end=timeline.events.length - 1,
 ) {
     const {maxActivities, activities, aggregations} = precomputed
   
@@ -208,8 +194,8 @@ export function draw(canvas: HTMLCanvasElement, timeline: ITimeline, sim: ISimul
     // time_span : timelen = x : canvaswidth
 
     ctx.fillStyle = blue[500];
-    ctx.fillRect(time_start * canvas.width / timeline.length, 0, 
-        (time_end - time_start) *canvas.width / timeline.length
+    ctx.fillRect(time_start * canvas.width / timeline.events.length, 0, 
+        (time_end - time_start) *canvas.width / timeline.events.length
       , TOP_OFFS - 10);
 
 
