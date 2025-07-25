@@ -60,7 +60,8 @@
 import { ITimeline } from "../types";
 import { hashClientId } from "./utils";
 
-export function checkEventOrder(timeline: ITimeline) {
+export function checkEventOrder(_timeline: ITimeline) {
+    const timeline = _timeline.events;
 
     const fetchedSet = new Set<string>();
     const trainedSet = new Set<string>();

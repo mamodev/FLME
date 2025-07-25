@@ -14,10 +14,20 @@ type Param = {
   send_prob: number;
   min_idle_after_train: number;
   max_idle_after_train: number;
+  nbuff: number; // Buffer size, not used in this generator
 };
 
+function buffStrat(n: number) {
 
+  if (typeof n !== "number" || n <= 0) {
+    throw new Error("Buffer size must be a positive integer");
+  }
 
+  return function (updates: IUpdate[]): boolean {
+    console.log(`Buffer strategy: checking if updates length ${updates.length} >= ${n}`);
+    return updates.length >= n;
+  };
+}
 
 export function generate(simulation: ISimulation, params: Param): ITimeline {
   const {
@@ -28,18 +38,22 @@ export function generate(simulation: ISimulation, params: Param): ITimeline {
     max_idle_after_train,
   } = params;
 
+  const strategy = buffStrat(params.nbuff);
+
   const { client_per_partition } = simulation;
   let allClients = getAllClientIds(client_per_partition);
 
-  const timeline: ITimeline = [];
+  const timeline: ITimeline = {
+    events: [],
+    aggregations: [],
+  }
 
   const clientStates: Record<string, ClientState> = {};
   const idleAfterTrain: Record<string, number> = {};
 
   let updates: IUpdate[] = [];
-  let naggregations = 0;
 
-  while (naggregations < simulation.naggregations) {
+  while (timeline.aggregations.length < simulation.naggregations) {
     const events: IEvent[] = [];
 
     allClients = shuffleArray(allClients);
@@ -84,8 +98,13 @@ export function generate(simulation: ISimulation, params: Param): ITimeline {
 
             updates.push({
               client: clientId,
-              tick: timeline.length,
+              tick: timeline.events.length,
             });
+
+            if (strategy(updates)) {
+              updates = [];
+              events[events.length - 1].cause_aggregation = true;
+            }
           }
           break;
 
@@ -93,10 +112,7 @@ export function generate(simulation: ISimulation, params: Param): ITimeline {
           throw new Error(`Unknown state: ${state}`);
       }
 
-      if (simulation.strategy(updates)) {
-        updates = [];
-        naggregations++;
-      }
+     
     }
 
     const sendEvents = events.filter((event) => event.type === "send");
@@ -106,13 +122,20 @@ export function generate(simulation: ISimulation, params: Param): ITimeline {
 
     if (sendEvents.length > 0) {
       eventsWithoutSend.push(sendEvents[0]);
+      if (sendEvents[0].cause_aggregation) {
+        timeline.aggregations.push(timeline.events.length);
+      } 
     }
 
-    timeline.push(eventsWithoutSend);
+    timeline.events.push(eventsWithoutSend);
+    
 
     if (sendEvents.length > 1) {
       for (let i = 1; i < sendEvents.length; i++) {
-        timeline.push([sendEvents[i]]);
+        timeline.events.push([sendEvents[i]]);
+        if (sendEvents[i].cause_aggregation) {
+          timeline.aggregations.push(timeline.events.length - 1);
+        }
       }
     }
   }
@@ -125,6 +148,12 @@ export const TLRandomAsync: IModule = {
   name: "Random Async",
   description: "Randomly select clients to fetch, train, and send updates.",
   parameters: {
+    nbuff: {
+      type: "int",
+      default: 5,
+      min: 1,
+      max: 1000,
+    },
     fetch_prob: {
       type: "float",
       min: 0,
@@ -155,5 +184,6 @@ export const TLRandomAsync: IModule = {
       max: 10,
       default: 3,
     },
+
   },
 };

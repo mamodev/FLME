@@ -24,7 +24,23 @@ folders = [
     ".notes",
 ]
 
-snampshot_name = input("Enter the name of the snapshot: ")
+
+if args.restore:
+    if not os.path.exists(".snapshots"):
+        print("No snapshots directory found. Please create a snapshot first.")
+        exit(1)
+
+    # List all snapshots
+    snapshots = [d for d in os.listdir(".snapshots") if os.path.isdir(os
+.path.join(".snapshots", d))]
+    if not snapshots:
+        print("No snapshots available to restore.")
+        exit(1)
+    print("Available snapshots:")
+    for i, snapshot in enumerate(snapshots):
+        print(f"{i + 1}: {snapshot}")
+
+snampshot_name = input("Enter the name of the snapshot: " if not args.restore else "Enter the name of the snapshot to restore: ").strip()
 if not snampshot_name:
     print("Snapshot name cannot be empty.")
     exit(1)

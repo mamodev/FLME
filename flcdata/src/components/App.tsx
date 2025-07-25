@@ -11,6 +11,7 @@ import { TabContent } from "./Tabs";
 import { TimelinePanel } from "./timeline/TimelinePanel";
 import { NotesPanel } from "./notes/NotesPanel";
 import { PlotlyProvider } from "../contexts/PlotlyCtx";
+import { DatasetHubPanel } from "./dataset-hub/DatasetHubPanel";
 
 function AppContent() {
   const [tabIndex, setTabIndex] = React.useState(
@@ -22,6 +23,15 @@ function AppContent() {
   React.useEffect(() => {
     localStorage.setItem("tabIndex", tabIndex.toString());
   }, [tabIndex]);
+
+
+
+  const atoi = (() => {
+    let count = 0;
+    return () => {
+      return count++;
+    };
+  })()
 
   return (
     <Stack
@@ -35,6 +45,7 @@ function AppContent() {
     >
       <Tabs value={tabIndex} onChange={(_, newValue) => setTabIndex(newValue)}>
         <Tab label="Dataset generator" />
+        <Tab label="Dataset Hub" />
         <Tab label="Datasets" />
         <Tab label="Simulation Analysis" />
         <Tab label="Pipelines" />
@@ -42,27 +53,31 @@ function AppContent() {
         <Tab label="Notes" />
       </Tabs>
 
-      <TabContent value={tabIndex} current={0}>
+      <TabContent value={tabIndex} current={atoi()}>
         <DatasetGeneratorPanel />
       </TabContent>
 
-      <TabContent value={tabIndex} current={1}>
+      <TabContent value={tabIndex} current={atoi()}>
+        <DatasetHubPanel />
+      </TabContent>
+
+      <TabContent value={tabIndex} current={atoi()}>
         <DatasetPanel />
       </TabContent>
 
-      <TabContent value={tabIndex} current={2}>
+      <TabContent value={tabIndex} current={atoi()}>
         <SimulationAnalysis />
       </TabContent>
 
-      <TabContent value={tabIndex} current={3}>
+      <TabContent value={tabIndex} current={atoi()}>
         <PipelinesPanel />
       </TabContent>
 
-      <TabContent value={tabIndex} current={4}>
+      <TabContent value={tabIndex} current={atoi()}>
         <TimelinePanel />
       </TabContent>
 
-      <TabContent value={tabIndex} current={5}>
+      <TabContent value={tabIndex} current={atoi()}>
         <NotesPanel />
       </TabContent>
     </Stack>

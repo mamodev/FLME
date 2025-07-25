@@ -13,13 +13,11 @@ import { Module } from "../../backend/interfaces";
 import { generateDefaultParameters } from "../../utils/generatord";
 import { ModuleRenderer } from "../ModuleRenderer";
 import { TimelineGenerators } from "./generators/defs";
-import { IModule, ISimulation, ITimeline, IUpdate } from "./types";
+import { IEvent, IModule, ISimulation, ITimeline } from "./types";
 import { Timeline, TimelineProps } from "./Timeline";
-import { re } from "mathjs";
 import { checkEventOrder } from "./generators/check";
-import { execPython, read, useLS, writeJson } from "../../api/backend";
-import { computeAggregations, computeAggregationsStats } from "./strategies";
-import { useDatasets, useSavedFiles } from "../../api/useSave";
+import { read, useLS, writeJson } from "../../api/backend";
+import { computeAggregationsStats } from "./strategies";
 import { useRunPipeline } from "../../api/pipelines";
 import { ensureExtname, pj } from "../../utils/path";
 import { TabContent } from "../Tabs";
@@ -41,12 +39,6 @@ import { gaussianRandomWithParams } from "../../utils/guassian";
 
 //   return clients_per_partition;
 // }
-
-function buffStrat(n: number) {
-  return function (updates: IUpdate[]): boolean {
-    return updates.length >= n;
-  };
-}
 
 // const fedAvgUniformSimulation: ISimulation = {
 //   npartitions: 8,
@@ -106,12 +98,6 @@ const simulationModule: Module = {
       min: 1,
       max: 1000,
     },
-    nbuff: {
-      type: "int",
-      default: 5,
-      min: 1,
-      max: 1000,
-    },
   },
 };
 
@@ -135,6 +121,8 @@ export function TimelinePanel() {
     props: generateDefaultParameters(TimelineGenerators[0]),
   });
 
+  console.log("TimelinePanel generator", generator, generator.props);
+
   const [simulatinParams, setSimulationParams] = React.useState<any>(
     generateDefaultParameters(simulationModule)
   );
@@ -148,28 +136,29 @@ export function TimelinePanel() {
 
   const [generated, setGenerated] = React.useState<TimelineProps | null>(null);
 
-  const handleGenerate = () => {
 
-    let cpp: number[] = []
-    if (simulatinParams.cp_distr === "uniform") {
-      cpp = Array(simulatinParams.npartitions).fill(
-        simulatinParams.client_per_partition
+  const computeCPP = (sim_params: any): number[] => {
+    if (sim_params.cp_distr === "uniform") {
+      return Array(sim_params.npartitions).fill(
+        sim_params.client_per_partition
       );
-    } else {
-      cpp = Array(simulatinParams.npartitions).fill(0).map((_, i) => {
-        
-        const mean = simulatinParams.client_per_partition;
-        const std = Math.floor(mean / 2);
-          
-        return Math.floor(Math.abs(gaussianRandomWithParams(mean, std)))
+    } else {  
+      return Array(sim_params.npartitions)
+        .fill(0)
+        .map((_, i) => {
+          const mean = sim_params.client_per_partition;
+          const std = Math.floor(mean / 2);
 
-      })
+          return Math.floor(Math.abs(gaussianRandomWithParams(mean, std)));
+        });
     }
+  };
 
 
+  const handleGenerate = () => {
+    let cpp = computeCPP(simulatinParams);
     const sim: ISimulation = {
       ...simulatinParams,
-      strategy: buffStrat(simulatinParams.nbuff),
       client_per_partition: cpp,
     };
 
@@ -178,7 +167,7 @@ export function TimelinePanel() {
     let errors = checkEventOrder(timeline);
     if (errors != null) {
       alert(errors);
-      throw new Error(errors);
+      // throw new Error(errors);
     }
 
     setGenerated({
@@ -196,8 +185,6 @@ export function TimelinePanel() {
     null
   );
 
-  const [lrRange, setLrRange] = React.useState<number[]>([0.1, 0.1]);
-
 
   async function loadFile(file: string) {
     read(".timelines/" + file)
@@ -212,6 +199,20 @@ export function TimelinePanel() {
             (mod) => mod.name === modules.generator.name
           )!,
           props: modules.generator.parameters,
+        });
+
+        let cpp = computeCPP(modules.simulation.parameters);
+        const sim: ISimulation = {
+          ...simulatinParams,
+          client_per_partition: cpp,
+        };
+
+        setGenerated({
+          sim,
+          timeline: {
+            events: parsed.timeline,
+            aggregations: parsed.aggregations,
+          },
         });
       })
       .catch((err) => {
@@ -280,33 +281,7 @@ export function TimelinePanel() {
           />
         </Stack>
 
-        <Stack sx={{ width: 400, pt: 1}} spacing={1}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <TextField
-              label="Learning Rate Max"
-              type="number"
-              size="small"
-
-              value={lrRange[0]}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                if (isNaN(val)) return;
-                setLrRange([val, lrRange[1]]);
-              }}
-            />
-
-            <TextField
-              label="Learning Rate Min"
-              size="small"
-              type="number"
-              value={lrRange[1]}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                if (isNaN(val)) return;
-                setLrRange([lrRange[0], val]);
-              }}
-            />
-          </Stack>
+        <Stack sx={{ width: 400, pt: 1 }} spacing={1}>
 
           <Button onClick={handleGenerate}>Generate</Button>
 
@@ -323,8 +298,6 @@ export function TimelinePanel() {
               renderInput={(params) => (
                 <TextField {...params} label="Saved Files" />
               )}
-
-
             />
 
             <Button
@@ -336,9 +309,9 @@ export function TimelinePanel() {
                 if (gen == null) gen = handleGenerate();
 
                 const FILE = {
-                  timeline: gen!.timeline,
+                  timeline: gen!.timeline.events,
                   sim: gen!.sim,
-                  aggregations: computeAggregations(gen!.sim, gen!.timeline),
+                  aggregations: gen!.timeline.aggregations,
                   modules: {
                     simulation: {
                       name: simulationModule.name,
@@ -394,24 +367,18 @@ export function TimelinePanel() {
                 if (!fileSave || !selectedDataset) return;
 
                 let sim_name = "sim";
-                if (lrRange[0] !== 0.1 || lrRange[1] !== 0.1) {
-                  sim_name = `sim_(${lrRange[0]}:${lrRange[1]})`;
-                }
 
+                const ds_name = selectedDataset.replace(".npz", "");
+                const fileSaveName = fileSave.replace(".json", "");
+                
                 runPipeline
                   .mutateAsync({
                     temp_name: "timeline_pip",
                     args: {
                       SIM_NAME: sim_name,
-                      DS_NAME: selectedDataset.endsWith(".npz")
-                        ? selectedDataset.split(".")[0]
-                        : selectedDataset,
-                      TIMELINE: fileSave.endsWith(".json")
-                        ? fileSave.split(".")[0]
-                        : fileSave,
+                      DS_NAME: ds_name,
+                      TIMELINE: fileSaveName,
                       SEED: "0",
-                      LR_MIN: lrRange[0].toString(),
-                      LR_MAX: lrRange[1].toString(),
                     },
                   })
                   .then(() => {
@@ -429,15 +396,18 @@ export function TimelinePanel() {
       </Stack>
 
       {/* <Timeline sim={fedAvgUniformSimulation} timeline={timeline} /> */}
-      <Tabs onChange={(e, newValue) => {
-        setViewTab(newValue);
-      }} value={viewTab} sx={{ borderBottom: 1, borderColor: "divider" }}>
+      <Tabs
+        onChange={(e, newValue) => {
+          setViewTab(newValue);
+        }}
+        value={viewTab}
+        sx={{ borderBottom: 1, borderColor: "divider" }}
+      >
         <Tab label="Timeline" />
         <Tab label="Client Contributions" />
         <Tab label="Partition Distribution" />
         <Tab label="Partition Contributions" />
       </Tabs>
-
 
       {generated != null && (
         <Stack
@@ -446,30 +416,27 @@ export function TimelinePanel() {
             p: 1,
           }}
         >
-                
-        <TabContent current={viewTab} value={0}>
-          <Timeline sim={generated.sim} timeline={generated.timeline} />
-        </TabContent>
+          <TabContent current={viewTab} value={0}>
+            <Timeline sim={generated.sim} timeline={generated.timeline} />
+          </TabContent>
 
-        <TabContent current={viewTab} value={1}>
-          <ContributionsPanel 
-            sim={generated.sim}
-            timeline={generated.timeline}
-          />
-        </TabContent>
+          <TabContent current={viewTab} value={1}>
+            <ContributionsPanel
+              sim={generated.sim}
+              timeline={generated.timeline}
+            />
+          </TabContent>
 
-        <TabContent current={viewTab} value={2}>
-          <PartitionClientDistr sim={generated.sim} />
-        </TabContent>
+          <TabContent current={viewTab} value={2}>
+            <PartitionClientDistr sim={generated.sim} />
+          </TabContent>
 
-
-        <TabContent current={viewTab} value={3}>
-          <PartitionContributions
-            sim={generated.sim}
-            timeline={generated.timeline}
-          />
-        </TabContent>
-
+          <TabContent current={viewTab} value={3}>
+            <PartitionContributions
+              sim={generated.sim}
+              timeline={generated.timeline}
+            />
+          </TabContent>
         </Stack>
       )}
 
@@ -477,7 +444,7 @@ export function TimelinePanel() {
         <Stack
           justifyContent="center"
           alignItems="center"
-        sx={{
+          sx={{
             flex: 1,
             p: 1,
           }}
@@ -485,11 +452,6 @@ export function TimelinePanel() {
           <Typography variant="h6">No timeline generated</Typography>
         </Stack>
       )}
-
-
-    
-
-     
     </Stack>
   );
 }
@@ -499,23 +461,20 @@ type PartitionContributionProps = {
   timeline: ITimeline;
 };
 
-
 function PartitionContributions(props: PartitionContributionProps) {
-  const stats = React.useMemo(() => computeAggregationsStats(props.sim, props.timeline), [props.sim, props.timeline]);
-
-  const XX = Array.from(
-    { length: props.sim.npartitions },
-    (_, i) => i
+  const stats = React.useMemo(
+    () => computeAggregationsStats(props.sim, props.timeline),
+    [props.sim, props.timeline]
   );
+
+  const XX = Array.from({ length: props.sim.npartitions }, (_, i) => i);
 
   const YY = XX.map((p) => {
     return Object.values(stats[p]).reduce((a, b) => a + b, 0);
   });
 
-
   return (
     <Stack flex={1}>
-
       <PlotRenderer
         data={[
           {
@@ -528,7 +487,6 @@ function PartitionContributions(props: PartitionContributionProps) {
             },
           },
         ]}
-       
         layout={{
           title: "Partition Contributions",
           xaxis: {
@@ -542,7 +500,7 @@ function PartitionContributions(props: PartitionContributionProps) {
           yaxis: {
             title: {
               text: "Contributions",
-            }
+            },
           },
         }}
       />
@@ -550,48 +508,45 @@ function PartitionContributions(props: PartitionContributionProps) {
   );
 }
 
-
-
-
 type PartitionClientDistr = {
   sim: ISimulation;
-}
+};
 
 function PartitionClientDistr(props: PartitionClientDistr) {
-
-  return <PlotRenderer
-    data={[
-      {
-        x: Array.from({ length: props.sim.npartitions }, (_, i) => i),
-        y: props.sim.client_per_partition,
-        type: "bar",
-        name: "Client per partition",
-        marker: {
-          color: "rgb(100, 100, 255)",
+  return (
+    <PlotRenderer
+      data={[
+        {
+          x: Array.from({ length: props.sim.npartitions }, (_, i) => i),
+          y: props.sim.client_per_partition,
+          type: "bar",
+          name: "Client per partition",
+          marker: {
+            color: "rgb(100, 100, 255)",
+          },
         },
-      },
-    ]}
-    layout={{
-      title: "Partition Client Distribution",
-      xaxis: {
-        title: {
-          text: "Partitions",
+      ]}
+      layout={{
+        title: "Partition Client Distribution",
+        xaxis: {
+          title: {
+            text: "Partitions",
+          },
+          tickmode: "linear",
+          dtick: 1,
+          tick0: 0,
         },
-        tickmode: "linear",
-        dtick: 1,
-        tick0: 0,
-      },
-      yaxis: {
-        title: {
-          text: "Clients",
+        yaxis: {
+          title: {
+            text: "Clients",
+          },
+          tickmode: "linear",
+          dtick: 1,
+          tick0: 0,
         },
-        tickmode: "linear",
-        dtick: 1,
-        tick0: 0,
-      },
-    }}
-  />
-
+      }}
+    />
+  );
 }
 
 type ContributionsPanelProps = {
@@ -599,100 +554,92 @@ type ContributionsPanelProps = {
   timeline: ITimeline;
 };
 
-
-
 function ContributionsPanel(props: ContributionsPanelProps) {
-  
-
-  const [range, setRange] = React.useState<number[]>([0, props.timeline.length - 1]);
+  const [range, setRange] = React.useState<number[]>([
+    0,
+    props.timeline.events.length - 1,
+  ]);
 
   React.useEffect(() => {
-    setRange([0, props.timeline.length - 1]);
-  }
-  , [props.timeline]);
+    setRange([0, props.timeline.events.length - 1]);
+  }, [props.timeline]);
 
-  const stats = React.useMemo(() => computeAggregationsStats(props.sim, props.timeline.slice(range[0], range[1])), [props.sim, props.timeline]);
+  const stats = React.useMemo(() => {
+    const slicedTimeline = {
+      events: props.timeline.events.slice(range[0], range[1]),
+      aggregations: props.timeline.aggregations,
+    };
 
-  const data: PlotlyData[] = [];
-
-
-  // create histogram data
-  const XX = Array.from(
-    { length: props.sim.npartitions },
-    (_, i) => i
-  );
-
-  const maxClients = Math.max(
-    ...props.sim.client_per_partition
-  );
+    return computeAggregationsStats(props.sim, slicedTimeline);
+  }, [props.sim, props.timeline]);
 
 
-  for (let c = 0; c < maxClients; c++) {
-    const yy = Array.from(
-      { length: props.sim.npartitions },
-      (_, i) => 0
-    );
 
-    for (let p = 0; p < props.sim.npartitions; p++) {
-      if (c < props.sim.client_per_partition[p]) {
-        yy[p] = stats[p][c];
+  const data = React.useMemo(() => {
+    const XX = Array.from({ length: props.sim.npartitions }, (_, i) => i);
+
+    const maxClients = Math.max(...props.sim.client_per_partition);
+
+    const data: PlotlyData[] = [];
+
+    for (let c = 0; c < maxClients; c++) {
+      const yy = Array.from({ length: props.sim.npartitions }, (_, i) => 0);
+
+      for (let p = 0; p < props.sim.npartitions; p++) {
+        if (c < props.sim.client_per_partition[p]) {
+          yy[p] = stats[p][c];
+        }
       }
+
+      data.push({
+        x: XX,
+        y: yy,
+        type: "bar",
+        name: `Client ${c}`,
+        marker: {
+          color: `rgb(100, ${Math.floor((c / maxClients) * 255)}, 100)`,
+        },
+      });
     }
 
-    data.push({
-      x: XX,
-      y: yy,
-      type: "bar",
-      name: `Client ${c}`,
-
-      marker: {
-        color: `rgb(100, ${Math.floor((c / maxClients) * 255)}, 100)`,
-      },
-
-    });
-  }
-
-
+    return data;
+  }, [props.sim, stats, range]);
 
   return (
-
     <>
-    <Stack flex={1}>
-      
-    <Slider
-      value={range}
-      onChange={(e, newValue) => {
-        setRange(newValue as number[]);
-      }}
-      valueLabelDisplay="auto"
-      min={0}
-      max={props.timeline.length - 1}
-      disableSwap
-      step={1}
-    />
-    <PlotRenderer
-
-    data={data}
-
-    layout={{
-      title: "Contributions",
-      xaxis: {
-        title: {
-          text: "Partitions",
-        },
-        tickmode: "linear",
-        dtick: 1,
-        tick0: 0,
-      },
-      yaxis: {
-        title: {
-          text: "Contributions",
-        }
-      },
-    }}
-
-    />
-    </Stack>
+      <Stack flex={1}>
+        <Slider
+          value={range}
+          onChange={(e, newValue) => {
+            setRange(newValue as number[]);
+          }}
+          valueLabelDisplay="auto"
+          min={0}
+          max={props.timeline.events.length - 1}
+          disableSwap
+          step={1}
+        />
+        
+        <PlotRenderer
+          data={data}
+          layout={{
+            title: "Contributions",
+            xaxis: {
+              title: {
+                text: "Partitions",
+              },
+              tickmode: "linear",
+              dtick: 1,
+              tick0: 0,
+            },
+            yaxis: {
+              title: {
+                text: "Contributions",
+              },
+            },
+          }}
+        />
+      </Stack>
     </>
   );
 }

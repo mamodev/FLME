@@ -88,7 +88,7 @@ class FLCDataset(Dataset):
         for i in range(len(partitions)):
             # create a new dataset for each partition
             dss.append(
-                FLCDataset(self.data[partitions[i]], self.targets[partitions[i]], self.n_classes, dex=f"{self.dex}-pp-{i}")
+                FLCDataset(self.data[partitions[i]], self.targets[partitions[i]], self.n_classes, dex=f"{self.dex}")
             )
 
         return dss
@@ -124,8 +124,20 @@ class FLCDataset(Dataset):
             int(data["XX"].shape[1]),
             int(data["n_classes"]),
         )
-    
+
 from torch import nn
+
+class VerySimpleModel(nn.Module):
+    def __init__(self, insize=2, outsize=8):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(insize, outsize),
+            nn.LogSoftmax(dim=1)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+
 class SimpleModel(nn.Module):
     def __init__(self, insize=3, outsize=8):
         super().__init__()

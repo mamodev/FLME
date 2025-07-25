@@ -18,6 +18,8 @@ export function Timeline(props: TimelineProps) {
     if (ref.current) {
       const container = ref.current;
 
+      const events = timeline.events;
+
       function getCanvas(): HTMLCanvasElement {
         let canvas = container.querySelector("canvas");
         if (!canvas) {
@@ -42,7 +44,7 @@ export function Timeline(props: TimelineProps) {
 
       const __precomp = precompute(timeline, sim);
 
-      let range = [0, Math.min(timeline.length - 1, 500)];
+      let range = [0, Math.min(events.length - 1, 500)];
 
       function setRange(fn: (old: number[]) => number[]) {
         range = fn(range);
@@ -111,8 +113,8 @@ export function Timeline(props: TimelineProps) {
                 dx = 0;
               }
 
-              if (dx > 0 && range[1] + dx > timeline.length - 1) {
-                dx = timeline.length - 1 - range[1];
+              if (dx > 0 && range[1] + dx > events.length - 1) {
+                dx = events.length - 1 - range[1];
               }
 
               let r = [range[0] + dx, range[1] + dx];
@@ -135,17 +137,17 @@ export function Timeline(props: TimelineProps) {
         console.log(now.getTime() - last_mouse_down.getTime());
         if (now.getTime() - last_mouse_down.getTime() < 200) {
           if (range[0] !== 0) {
-            setRange(() => [0, timeline.length - 1]);
+            setRange(() => [0, events.length - 1]);
           } else {
             const x = event.clientX;
 
             const rect = canvas.getBoundingClientRect();
 
-            const t = (x * timeline.length) / rect.width;
+            const t = (x * events.length) / rect.width;
 
-            const zoom = timeline.length * 0.1;
+            const zoom = events.length * 0.1;
 
-            const skew = t / timeline.length;
+            const skew = t / events.length;
             console.log("sle", skew);
 
             setRange(() => [
@@ -206,11 +208,11 @@ export function Timeline(props: TimelineProps) {
           const newRange = [
             Math.max(
               Math.floor(t - zoomLeft),
-              -Math.floor(timeline.length * 1.5)
+              -Math.floor(events.length * 1.5)
             ),
             Math.min(
               Math.floor(t + zoomRight),
-              Math.floor(timeline.length * 1.5)
+              Math.floor(events.length * 1.5)
             ),
           ];
 
@@ -256,16 +258,7 @@ export function Timeline(props: TimelineProps) {
       }}
     >
       &nbsp;
-      {/* <Button 
-      onClick={() => {
-        navigator.clipboard.writeText(
-          JSON.stringify( {
-            timeline,
-            aggregations: computeAggregations(sim, timeline),
-          }, null, 2));
-      }}>
-      Copy
-    </Button> */}
+   
     </div>
   );
 }

@@ -264,7 +264,12 @@ def get_saved_files():
     for i, file in enumerate(files):
         file_path = os.path.join(DATA_FOLDER, file)
         data = np.load(file_path, allow_pickle=True)
-        generation_params = data['generation_params'].item()
+        
+        if 'generation_params' in data:
+            generation_params = data['generation_params'].item()
+        else:
+            generation_params = {}
+            
         n_samples = data['n_samples'].item()
         n_classes = data['n_classes'].item()
         n_partitions = data['n_partitions'].item()

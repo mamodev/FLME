@@ -180,6 +180,12 @@ function EnumParameterRenderer(props: EnumParameterProps) {
         renderInput={(params) => (
           <TextField {...params} variant="outlined" />
         )}
+
+        sx={{
+          "& .MuiInputBase-root": {
+            padding: "0px !important",
+          },
+        }}
         />
     </Stack>
   );
