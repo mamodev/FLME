@@ -1,199 +1,36 @@
 
+# ==== FRAMEWORK COMPATIBILITY CODE ====
 print(f"running {__file__}", flush=True)
-
 import sys
 import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+    
+# ===== END COMPATIBILITY CODE =====
 
 import json
+import math
 from typing import List, Tuple, Dict, Union, Any
 import time
 import threading
-# Define Python equivalents for the TypeScript types
+import copy
 
-# Event Types
-EventType = str  # Literal["fetch", "train", "send"]
-Client = Tuple[int, int]
-
-EventFetchModel = Dict[str, Any]
-EventTrainModel = Dict[str, Any]
-EventSendModel = Dict[str, Any]
-
-Event = Union[EventFetchModel, EventTrainModel, EventSendModel]
-Timeline = List[List[Event]]
-
-Simulation = Dict[str, Any]
-
-SimExport = Dict[str, Any]
-
-
-def parse_sim_export(json_file_path: str) -> SimExport:
-    """
-    Parses a JSON file with the structure of SIM_EXPORT (ITimeline).
-
-    Args:
-        json_file_path: The path to the JSON file.
-
-    Returns:
-        A dictionary representing the parsed SIM_EXPORT data.
-    """
-    try:
-        with open(json_file_path, "r") as f:
-            data = json.load(f)
-
-        # Basic validation
-        if not isinstance(data, dict):
-            raise ValueError("The JSON data must be a dictionary.")
-        if "timeline" not in data:
-            raise ValueError("The JSON data must contain a 'timeline' field.")
-        if "aggregations" not in data:
-            raise ValueError(
-                "The JSON data must contain an 'aggregations' field."
-            )
-        if "sim" not in data:
-            raise ValueError("The JSON data must contain a 'sim' field.")
-
-        # Validation for aggregations
-        if not isinstance(data["aggregations"], list):
-            raise ValueError(
-                "The 'aggregations' field must be a list of numbers."
-            )
-        for item in data["aggregations"]:
-            if not isinstance(item, (int, float)):
-                raise ValueError(
-                    "Each element in 'aggregations' must be a number."
-                )
-
-        # Validation for timeline (Timeline) - more complex
-        timeline = data["timeline"]
-        if not isinstance(timeline, list):
-            raise ValueError("The 'timeline' field must be a list (Timeline).")
-
-        for time_step in timeline:
-            if not isinstance(time_step, list):
-                raise ValueError(
-                    "Each time step in the Timeline must be a list of events."
-                )
-            for event in time_step:
-                if not isinstance(event, dict):
-                    raise ValueError("Each event must be a dictionary.")
-                if "type" not in event:
-                    raise ValueError("Each event must have a 'type' field.")
-                if "client" not in event:
-                    raise ValueError("Each event must have a 'client' field.")
-
-                # Further validation based on event type can be added here
-
-        if not isinstance(data["sim"], dict):
-            raise ValueError("The 'sim' field must be a dictionary.")
-        
-        return data
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File not found: {json_file_path}")
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON format: {e}")
-    except ValueError as e:
-        raise ValueError(f"Error parsing JSON: {e}")
-
-
-class MemoryDataLoader:
-    def __init__(
-        self, data, targets, batch_size=1024, shuffle=False,
-        n_partitions=1, partition_idx=0
-    ):
-        self.data = data
-        self.targets = targets
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.n_partitions = n_partitions
-        self.partition_idx = partition_idx
-
-        # Calculate partition indices
-        total_len = len(self.data)
-        part_size = total_len // n_partitions
-        remainder = total_len % n_partitions
-
-        # Compute start and end indices for this partition
-        self.start_idx = partition_idx * part_size + min(partition_idx, remainder)
-        self.end_idx = self.start_idx + part_size
-        if partition_idx < remainder:
-            self.end_idx += 1
-
-        # Slice the data for this partition
-        self.partition_data = self.data[self.start_idx:self.end_idx]
-        self.partition_targets = self.targets[self.start_idx:self.end_idx]
-
-    def set_batch_size(self, batch_size):
-        self.batch_size = batch_size
-
-    def __iter__(self):
-        indices = list(range(len(self.partition_data)))
-        if self.shuffle:
-            import random
-            random.shuffle(indices)
-        for i in range(0, len(indices), self.batch_size):
-            batch_indices = indices[i:i + self.batch_size]
-            batch_indices = torch.tensor(batch_indices, dtype=torch.long)
-            yield (
-                self.partition_data[batch_indices],
-                self.partition_targets[batch_indices]
-            )
-            
-    def __len__(self):
-        return len(self.partition_data)
-
-
-
-def dataset_to_device(dataset, device, batch_size=1024, shuffle=False, n_partitions=1, partition_idx=0):
-    dataset.data = dataset.data.to(device)
-    dataset.targets = dataset.targets.to(device)
-    return MemoryDataLoader(dataset.data, dataset.targets, batch_size=batch_size, shuffle=shuffle)
-
+from timeline_parser import parse_sim_export, compute_partition_shards, SimExport, Timeline, Event, EventFetchModel, EventTrainModel, EventSendModel
+from timeline_utils import MemoryDataLoader, chash, deep_clone_sdict
 
 import torch
-import numpy as np
 import torch.nn.functional as functional
+import torch.multiprocessing as mp
+
+import numpy as np
 from io import BytesIO
 
-def chash(client):
-    return f"{client[0]}_{client[1]}"
-
-def deep_clone_sdict(state_dict):
-    return {k: v.clone() for k, v in state_dict.items()}
-
-# def deep_clone_sdict(state_dict):
-#     # check if device is != cpu
-#     cpu_model = {}
-#     for k, v in state_dict.items():
-#         if isinstance(v, torch.Tensor):
-#             cpu_model[k] = v.cpu().clone()
-#         else:
-#             raise ValueError(f"Unsupported type {type(v)} for key {k}")
-
-#     iobuff = BytesIO()
-#     torch.save(cpu_model, iobuff)
-#     iobuff.seek(0)
-
-#     cpu_model = torch.load(iobuff)
-#     iobuff.close()
-
-#     # move back to original device
-#     for k, v in cpu_model.items():
-#         if isinstance(v, torch.Tensor):
-#             cpu_model[k] = v.to(state_dict[k].device)
-#         else:
-#             raise ValueError(f"Unsupported type {type(v)} for key {k}")
-    
-#     return cpu_model
-
+#=== END OF IMPORTS ====
 
 def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weight_decay):
     import cmds.FLME.protocol.protocol as protocol
 
-    model = deep_clone_sdict(model)
     net.load_state_dict(model)
     
     optimizer = torch.optim.SGD(net.parameters(),  
@@ -224,7 +61,7 @@ def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weigh
         train_loss /= len(train_loader)
         meta["train_loss"].append(train_loss)
 
-    return meta, deep_clone_sdict(net.state_dict())
+    return meta, net.state_dict()
 
 def aggregate_model(_mdl, updates):
     local_models = [
@@ -232,178 +69,416 @@ def aggregate_model(_mdl, updates):
         for meta, upd in updates
     ]
     
-    model = {k: sum([m[k] * n for m, n in local_models]) / sum([n for _, n in local_models]) for k in local_models[0][0].keys()}
-
+    total_weight = sum([n for _, n in local_models])
+    keys = [k for k in local_models[0][0].keys()]
+    
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # for m, _ in local_models:
+    #     for k in keys:
+    #         m[k] = m[k].to(device)
+    
+    model = {k: sum([m[k] * n for m, n in local_models]) / total_weight for k in keys}
     return model, {
             "contributors": [
                 meta for meta, model in updates
             ]
         }
 
-
-def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
-
-    import types
+def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, master_idx, masters_chs, in_ch, out_ch, device, ds_folder, splt_per_partition, cpp):
+    torch.cuda.set_device(device)
+    
     from lib.flcdata import FLCDataset, Model
-    from cmds.FLME.core.repository import ModelRepository
-    import logging
-    import torch.utils.bottleneck as bottleneck
-
-   
-    repo = ModelRepository.from_disk(repo_folder, ignore_exists=False, window_size=2)
-
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__file__)
-
-
-    logger.info("Loading datasets...")
     in_size, out_size = FLCDataset.LoadSize(ds_folder)
-    train_dss = FLCDataset.LoadGroups(ds_folder=ds_folder, train=True)
-    if len(train_dss) != sim["npartitions"]:
-        raise ValueError(f"Number of dataset partitions ({len(train_dss)}) does not match number of partitions ({sim['npartitions']}) of the timeline.")
+    net = Model(insize=in_size, outsize=out_size)
+    net.to(device)
 
-    logger.info("Datasets loaded.")
-    logger.info(f"Number of datasets: {len(train_dss)}")
-    logger.info(f"Moving datasets to device...")
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
-    
-    proportional_knowledge = "proportionalKnowledge" in sim and sim["proportionalKnowledge"]
-    splt_per_partition = sim["client_per_partition"]
-    if proportional_knowledge:
-        max_client_pp = max(splt_per_partition)
-        for pidx, nclients in enumerate(sim["client_per_partition"]):
-            splt_per_partition[pidx] = max_client_pp
+    if worker_id == 0:
+        train_dss = FLCDataset.LoadGroups(ds_folder=ds_folder, train=True)
+        train_dss = [ds.to(device) for ds in train_dss]
+        
+        device_barrier.wait()
+        for _ in range(device_workers - 1):
+            device_ch.put(train_dss)
+            
+        device_barrier.wait()
+            
+        out_ch.put("ready")
+    else:
+        device_barrier.wait()
+        train_dss = device_ch.get() 
+        assert isinstance(train_dss, list), f"Expected list of datasets, got {type(train_dss)}"
+        assert all(isinstance(ds, FLCDataset) for ds in train_dss), "All datasets must be FLCDataset instances."
+        device_barrier.wait() 
+
+    print(f"Worker on device {device} {worker_id} ready with {len(train_dss)} partitions.", flush=True)
 
     train_loaders = [
         [
-            dataset_to_device(
-                partition_ds,
-                device,
-                batch_size=1024,
+            MemoryDataLoader(
+                partition_ds.data, 
+                partition_ds.targets, 
+                batch_size=1024, 
                 shuffle=False,
                 n_partitions=splt_per_partition[pidx],
-                partition_idx=cidx,
+                partition_idx=cidx
             )
-            for cidx in range(sim["client_per_partition"][pidx])
+            for cidx in range(cpp[pidx])
         ]
         for pidx, partition_ds in enumerate(train_dss)
     ]
+    
+ 
+    gmodel_map = {}
+    local_upds = []
+    curr_local_model = None
+    
+    while True: 
+        event = in_ch.get()
+        if event is None:
+            break
+        
+        assert isinstance(event, dict), f"Event must be a dictionary, got {type(event)} : trimmed to {str(event)[:100]}..."
+        
+        if event['type'] == 'aggregation':
+            version = event['version']
+            
+            if 'clean_up_models' in event and len(event['clean_up_models']) > 0:
+                for v in event['clean_up_models']:
+                    if v in gmodel_map:
+                        del gmodel_map[v]
+            
+            if version != 1:
+                if worker_id != 0:
+                    device_ch.put(None if len(local_upds) == 0 else (curr_local_model, local_upds))
+               
+                curr_local_model = None
+                local_upds = []
+                device_barrier.wait()
+                
+                if worker_id == 0:
+                    DC_UPDATES = []
+                    for _ in range(device_workers - 1):
+                        upd = device_ch.get()
+                        if upd is not None:
+                            DC_UPDATES.append(upd)
+                            
+                    if len(local_upds) > 0:
+                        DC_UPDATES.append((curr_local_model, local_upds))
+                    
+                device_barrier.wait()
+             
+            if worker_id == 0:
+                metas = []
+                device_barrier.wait()
+                if version == 1:
+                    cpu_model = event['model']
+                    model = {k: v.to(device) for k, v in cpu_model.items()}
+                else:
+                    updates = DC_UPDATES 
+                            
+                    if len(updates) == 0:
+                        model = None
+                        total_weight = 0
+                    else:
+                        assert isinstance(updates, list), f"Updates must be a list, got {type(updates)}"
+                        assert all(isinstance(u, tuple) and len(u) == 2 for u in updates), f"Each update must be a tuple of (model, weight), got {[type(u) for u in updates]}"
+                        assert all(isinstance(u[0], dict) for u in updates), f"Each model in updates must be a dictionary, got {[type(u[0]) for u in updates]}"
+                        assert all(isinstance(u[1], list) and len(u[1]) > 0 for u in updates), f"Each update must have a non-empty list of contributors, got {[len(u[1]) for u in updates]}"
+                        
+                        UPD = [(model, sum([u['train_samples'] for u in metas])) for model, metas in updates]
+                        total_weight = sum([n for _, n in UPD])
+                        model = {k: sum([model[k] * n for model, n in UPD]) / total_weight for k in UPD[0][0].keys()}
+                    
+                    
+                    CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None 
+                    local_metas = [meta for _, meta in updates]
+                    local_metas = [item for sublist in local_metas for item in sublist]  
+                    for midx, m_ch in enumerate(masters_chs):
+                        if midx != master_idx:
+                            m_ch.put(None if model is None else (CPU_MODEL, local_metas))
+                    del CPU_MODEL
+                    
+                    others=[]
+                    for _ in range(n_masters - 1):
+                        o = masters_chs[master_idx].get()
+                        if o is not None:
+                            others.append(o)
+                            
+                    others = [o for o in others if o is not None]
+                    metas = [o[1] for o in others] #this is a list of lists of contributors, we need to flatten it
+                    metas = [item for sublist in metas for item in sublist]  # flatten the list of lists
+                    
+                    others = [{k: v.to(device) for k, v in o[0].items()} for o in others]
+                    
+                    if model is not None:
+                        others.append(model)  # add the current model to the list
+                        # metas.extend(local_metas)
+                        metas = metas + local_metas
+                    
+                    assert len(others) > 0, "No master had models to aggregate."
+                    
+                    weights = [m['train_samples'] for m in metas]
+                    final_weight = sum(weights)
+                    model = {k: sum([o[k] * w for o, w in zip(others, weights)]) / final_weight for k in others[0].keys()}
 
-    logger.info("Datasets moved to device.")
+                for _ in range(device_workers - 1):
+                    device_ch.put((model, version))
+            
+                device_barrier.wait()
+            else:
+                device_barrier.wait()
+                model, version = device_ch.get()
+                device_barrier.wait()
+
+        
+            if master_idx == 0 and worker_id == 0:
+                CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None
+                out_ch.put((CPU_MODEL, {
+                    "contributors": metas,
+                }))
+                del CPU_MODEL   
+        
+            assert version not in gmodel_map, f"Model version {version} already exists."
+            gmodel_map[version] = model
+            continue
+                
+
+        version = event.get('version', -1)
+        client = event.get('client', None)
+        loader = train_loaders[client[0]][client[1]]
+    
+        assert "train_params" in event, "Train parameters not found in event."
+        hyperparams = event['train_params']
+        opt = hyperparams['optimizer']['type']
+        assert opt == "sgd", f"Unsupported optimizer: {opt}. Only 'sgd' is supported."
+
+        bs = hyperparams['batch_size']
+        ephocs = hyperparams['ephocs']
+        lr = hyperparams['optimizer']['learning_rate']
+        momentum = hyperparams['optimizer'].get('momentum', 0.0)
+        weight_decay = hyperparams['optimizer'].get('weight_decay', 0.0)
+
+        loader.set_batch_size(bs)
+        
+        model = gmodel_map.get(version, None)
+        assert model is not None, f"Model version {version} not found in global model map."
+        
+        # Copy the model (which is a state_dict and already on the device). copy it doing an indevice copy (no cpu transfer)
+        model = {k: v.clone() for k, v in model.items()}
+        meta, upd = train_model(net, model, loader, learning_rate=lr, ephocs=ephocs, momentum=momentum, weight_decay=weight_decay)
+        
+        meta['base_version'] = version
+        meta['client'] = event['client']
+        meta['batch_size'] = bs
+        
+        if curr_local_model is None:
+            curr_local_model = {k: v * meta['train_samples'] for k, v in upd.items()}
+        else:
+            for k in curr_local_model.keys():
+                curr_local_model[k] += upd[k] * meta['train_samples']
+        
+        local_upds.append(meta)
+
+
+def repo_thread(repo, model_queue):
+    while True:
+        model = model_queue.get()
+        if model is None:
+            break
+
+        repo.put_model(*model)
+
+def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     assert len(aggregations) > 0, "At least one aggregation is required."
-
-    next_agg = aggregations[0]
-
-    repo.put_model(Model(
-        insize=in_size,
-        outsize=out_size,
-    ).state_dict(), {
-        "contributors": [],
-    })
-
-
-    sparse_client_model_map = {}
-
-    logger.info("Global model initialized. Starting simulation...")
+    assert len(timeline) > 0, "Timeline must contain at least one time step."
+    assert len(sim["client_per_partition"]) == sim["npartitions"], "Number of partitions does not match number of client partitions."
+    
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__file__)
+    
+    from lib.flcdata import FLCDataset, Model
+  
+    
+    logger.info("Loading datasets...")
+    in_size, out_size = FLCDataset.LoadSize(ds_folder)
+    splt_per_partition = compute_partition_shards(sim["client_per_partition"], sim.get("proportionalKnowledge", False))
+    logger.info(f"Input size: {in_size}, Output size: {out_size}")
     logger.info(f"Timeline length: {len(timeline)}")
     logger.info(f"Aggregations: {len(aggregations)}")
+    
 
-    updates = []
+    # Calculate max teorethical concurrency
+    max_concurrency = 6
+    curr_max = 0
+    agg_indx = 0
+    for t, events in enumerate(timeline):
+        for event in events:
+            if event['type'] == 'send':
+                curr_max += 1
+        
+        if t >= aggregations[agg_indx]:
+            agg_indx += 1
+            if curr_max > max_concurrency:
+                max_concurrency = curr_max
+            curr_max = 0
+            
+            if agg_indx >= len(aggregations):
+                break
+    
+    logger.info(f"Max concurrency: {max_concurrency}")
+    
+    # check how many cuda devices are available
+    n_devices = torch.cuda.device_count()
+    max_worker_per_device = 4
+    # worker_per_device = min(max_worker_per_device, max(1 math.ceil(max_concurrency / n_devices)))
+    worker_per_device = min(max_worker_per_device, max(1, math.ceil(max_concurrency / n_devices)))
     
     
-    tm_last_agg = time.perf_counter()
-    net = Model(
-                insize=in_size,
-                outsize=out_size,
+    
+    devices = [torch.device(f"cuda:{i}") for i in range(n_devices)]
+    assert n_devices > 0, "No CUDA devices available."
+    logger.info(f"Number of CUDA devices: {n_devices}")
+    logger.info(f"Worker per device: {worker_per_device}")
+    
+    ctx = mp.get_context('spawn')
+    job_queue = ctx.Queue()
+    result_queue = ctx.Queue()
+    device_barriers=        [ctx.Barrier(worker_per_device) for _ in range(n_devices)]
+    device_inner_channel =  [ctx.Queue() for _ in range(n_devices)]
+    masters_chs =           [ctx.Queue() for _ in range(n_devices)]
+    
+    processes = []
+    for didx, device in enumerate(devices):
+        
+        for i in range(worker_per_device):
+            args = (
+                worker_per_device, 
+                i,
+                device_barriers[didx], 
+                device_inner_channel[didx],
+                n_devices,
+                didx,
+                masters_chs,
+                job_queue, 
+                result_queue, 
+                device, 
+                ds_folder,
+                splt_per_partition, 
+                sim["client_per_partition"],
             )
+            
+            p = ctx.Process(target=worker, args=args)
+            p.start()
+            processes.append(p)
+            
+    logger.info(f"Started {len(processes)} worker processes.")
     
-    net.to(device)
+    # get ack from masters
+    for _ in range(n_devices):
+        _ = result_queue.get()
+        
+    logger.info("Workers initialized and ready.")
+
+    # time.sleep(10000)
+    tm_last_agg = time.perf_counter()
     
-    global_model_map = {
-        1: {
-            "model": net.state_dict(),
-            'ref-count': 0,
-        }
-    }
+    
+    base_model = Model(insize=in_size, outsize=out_size).state_dict()
+    
+    # spawn a thread to handle repository updates (normal python thread )
+    from threading import Thread
+    from queue import Queue
+    from cmds.FLME.core.repository import ModelRepository
+    repo_model_queue = Queue()
+    repo = ModelRepository.from_disk(repo_folder, ignore_exists=False, window_size=2)
+    repo_thread_instance = Thread(target=repo_thread, args=(repo, repo_model_queue), daemon=True)
+    repo_thread_instance.start()
+    del repo
+    
+    repo_model_queue.put((base_model, {
+        "contributors": [],
+    }))
+        
+
+    
+    for _ in range(n_devices * worker_per_device):
+        job_queue.put({
+            "type": "aggregation",
+            "version": 1,
+            "model": base_model,
+        })
+        
+    del base_model  
+        
+    _ = result_queue.get()
+
+    logger.info("Base model pushed to repository and workers notified.")
+    
+    time.sleep(1)
+    
+    sparse_client_model_map = {}
+    global_model_map = { 1: 0 }
     
     latest_model_version = 1
-    
+    pending_jobs = 0
+    next_agg = aggregations[0]
     for t, events in enumerate(timeline):
         for event in events:
             ckey = chash(event['client'])
             if event['type'] == 'fetch':
-                version = latest_model_version
-                sparse_client_model_map[ckey] = version
-                global_model_map[version]['ref-count'] += 1
+                sparse_client_model_map[ckey] = latest_model_version
+                global_model_map[latest_model_version] += 1
                 
-            
             elif event['type'] == 'train':
                 pass
             
-            elif event['type'] == 'send':
-                # tm_start = time.perf_counter()
-        
+            elif event['type'] == 'send':        
                 version = sparse_client_model_map[ckey]
                 if version not in global_model_map:
                     raise ValueError(f"Client {ckey} not found in global model map.")
                 
-                global_model_map[version]['ref-count'] -= 1
-                
-                model = global_model_map[version]['model']
-                data_loader = train_loaders[event['client'][0]][event['client'][1]]
-
-                if global_model_map[version]['ref-count'] == 0 and version != latest_model_version:
-                    del global_model_map[version]
-
                 del sparse_client_model_map[ckey]
-
-
-                assert "train_params" in event, "Train parameters not found in event."
-                hyperparams = event['train_params']
-                opt = hyperparams['optimizer']['type']
-                assert opt == "sgd", f"Unsupported optimizer: {opt}. Only 'sgd' is supported."
-
-                bs = hyperparams['batch_size']
-                ephocs = hyperparams['ephocs']
-                lr = hyperparams['optimizer']['learning_rate']
-                momentum = hyperparams['optimizer'].get('momentum', 0.0)
-                weight_decay = hyperparams['optimizer'].get('weight_decay', 0.0)
-
-                data_loader.set_batch_size(bs)
-
-                meta, upd = train_model(net, model, data_loader, learning_rate=lr, ephocs=ephocs, momentum=momentum, weight_decay=weight_decay)
-
-                meta['base_version'] = version
-                meta['client'] = event['client']
-                meta['batch_size'] = bs
-
-                updates.append((meta, upd))
+                global_model_map[version] -= 1
+                # if global_model_map[version]['ref-count'] == 0 and version != latest_model_version:
+                #     del global_model_map[version]
+                event['version'] = version
+                job_queue.put(event)
+                pending_jobs += 1
             else:
                 raise ValueError(f"Unknown event type: {event['type']}")
 
         if next_agg == t:
-            # global_model, meta = aggregate_model(global_model_map[latest_model_version]['model'], updates)
-            global_model, meta = aggregate_model(None, updates)
+            clean_up_models = []
+            for version, ref_count in global_model_map.items():
+                if ref_count == 0:
+                    clean_up_models.append(version)
+                    
+            for version in clean_up_models:
+                    del global_model_map[version]
+                
+            for _ in range(n_devices * worker_per_device):
+                job_queue.put({
+                    "type": "aggregation",
+                    "version": latest_model_version + 1,
+                    "model": None,  
+                    "clean_up_models": clean_up_models,
+                })
 
-
-            if global_model_map[latest_model_version]['ref-count'] == 0:
-                del global_model_map[latest_model_version]
-
-            repo.put_model(global_model, meta)
-
+            global_model = result_queue.get()
+            assert isinstance(global_model, tuple) and len(global_model) == 2, "Global model must be a tuple of (model, meta)."
+            assert global_model[0] is not None, "Global model cannot be None."
+            assert isinstance(global_model[0], dict), "Global model meta must be a dictionary."
+            assert isinstance(global_model[1], dict), "Global model meta must be a dictionary."
+            
+            repo_model_queue.put(global_model)
+            
             latest_model_version += 1
-            global_model_map[latest_model_version] = {
-                "model": global_model,
-                'ref-count': 0,
-            }
-
+            global_model_map[latest_model_version] = 0
             now = time.perf_counter()
-
+            
             logger.info(f"New GModel: {latest_model_version}, Elapsed Time: {now - tm_last_agg:.2f}s")
             tm_last_agg = now
-            updates.clear()
 
             if latest_model_version > len(aggregations) - 1:
                 logger.info("All aggregations completed.")
@@ -411,7 +486,18 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
 
             next_agg = aggregations[latest_model_version]
 
-
+    logger.info("Simulation completed. Waiting for workers to finish...")
+    for _ in range(len(processes)):
+        job_queue.put(None)
+        
+    for p in processes:
+        p.join()
+        
+        # join repo thread
+    repo_model_queue.put(None)
+    repo_thread_instance.join()
+    
+    logger.info("All workers finished.")
 
 if __name__ == "__main__":
     import argparse
@@ -439,9 +525,6 @@ if __name__ == "__main__":
         run_simulation(sim, timeline, aggregations, args.ds_folder, args.repo_folder, args)
 
     except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}")
-
-
-
-
-
+        print(f"MAIN: Error: {e}")
+        import traceback
+        traceback.print_exc()

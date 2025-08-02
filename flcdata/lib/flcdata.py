@@ -13,9 +13,15 @@ class FLCDataset(Dataset):
         self.dex = dex
 
 
+    def to(self, device):
+        self.data = self.data.to(device)
+        self.targets = self.targets.to(device)
+            
+        return self
+        
     def __len__(self):
         return len(self.data)
-    
+
     def __getitem__(self, idx):
         return self.data[idx], self.targets[idx]
     
@@ -40,6 +46,16 @@ class FLCDataset(Dataset):
             "n_partitions": data["n_partitions"],
         }
     
+    def __copy__(self):
+        # Shallow copy: new object, same tensor/data refs
+        cls = self.__class__
+        new = cls.__new__(cls)
+        new.n_classes = self.n_classes
+        new.n_features = self.n_features
+        new.data = self.data
+        new.targets = self.targets
+        new.dex = self.dex
+        return new
 
     def LoadGroups(ds_folder, train=True):
         data = FLCDataset.__load_npz__(ds_folder, train)

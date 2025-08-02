@@ -10,9 +10,12 @@ import os
 import importlib
 import numpy as np
 
+from flask_compress import Compress
+from functools import lru_cache
 
 app = Flask(__name__)
 CORS(app, origins='*')  # Replace with your frontend's origin(s)
+Compress(app)  # Enable gzip compression for responses
 
 
 
@@ -387,30 +390,50 @@ def delete_simulation(simulation_name):
     else:
         return jsonify({"error": "Simulation not found"}), 404
 
+@lru_cache(maxsize=128)
+def _get_simulation_metrics_cached(simulation_name):
+    """
+    Helper function to get and cache simulation metrics.
+    This function is decorated with lru_cache for in-memory caching.
+    """
+    folder_path = os.path.join(SIM_FOLDER, simulation_name)
+    if not os.path.exists(folder_path):
+        return None, 404 # Return None and a status for not found
+
+    metrics = []
+    try:
+        files = os.listdir(folder_path)
+        metrics_files = [f for f in files if f.endswith('.metrics')]
+
+        for file_name in metrics_files:
+            file_path = os.path.join(folder_path, file_name)
+            with open(file_path, 'r') as f:
+                data = f.read()
+                jslist = json.loads(data)
+                metrics.append(jslist)
+    except Exception as e:
+        # Log the error for debugging
+        app.logger.error(f"Error processing simulation metrics for {simulation_name}: {e}")
+        return {"error": "Internal server error processing metrics"}, 500
+
+    metrics.sort(key=lambda x: x['version'])
+    return metrics, 200 # Return metrics and a success status
+
 @app.route('/api/simulation-metrics/<simulation_name>', methods=['GET'])
 def get_simulation_metrics(simulation_name):
     """
     Endpoint to retrieve metrics for a specific simulation.
+    Includes caching and automatic compression.
     """
-    folder_path = os.path.join(SIM_FOLDER, simulation_name)
-    if not os.path.exists(folder_path):
+    # Attempt to get metrics from cache or by processing
+    metrics, status_code = _get_simulation_metrics_cached(simulation_name)
+
+    if status_code == 404:
         return jsonify({"error": "Simulation not found"}), 404
-
-    files = os.listdir(folder_path)
-    metrics_files = [f for f in files if f.endswith('.metrics')]
-
-    metrics = []
-    for file in metrics_files:
-        file_path = os.path.join(folder_path, file)
-        with open(file_path, 'r') as f:
-            data = f.read()
-            jslist = json.loads(data)
-            metrics.append(jslist)
-
-    metrics.sort(key=lambda x: x['version'])
-
-
-    return jsonify(metrics)
+    elif status_code == 500:
+        return jsonify(metrics), 500 # metrics here is the error dictionary
+    else:
+        return jsonify(metrics)
 
 
 
