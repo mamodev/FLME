@@ -847,6 +847,8 @@ int sim_loop(void) {
                 ctp_msg.weight_decay = 0.0001;
                 ctp_msg.shuffle = false;
 
+                printf("Sending message to worker %u:%u\n", event->client_id, event->partition_id);
+
                 if (mq_send(wrk_out, (const char*)&ctp_msg, CTP_MESSAGE_SIZE, 0) == -1) {
                     perror("mq_send");
                     return -1;
@@ -867,7 +869,9 @@ int sim_loop(void) {
 
             
             memcpy(new_gmodel_ptr, SHM.globals_ptr, model_layers_offset);
-            
+           	
+	        printf("Waiting for %u models", pending_updates_count++);
+
             for (int u = 0; u < pending_updates_count; u++) {
                 struct ptc_msg ptc_msg = {0};
                 if (mq_receive(wrk_in, (char*)&ptc_msg, PTC_MESSAGE_SIZE, NULL) == -1) {

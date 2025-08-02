@@ -100,32 +100,6 @@ def run_command(args):
     cpu_devices = parse_device_arg(args.cpu)
     gpu_devices = parse_device_arg(args.gpu)
 
-    if len(cpu_devices) == 0 and len(gpu_devices) == 0:
-        print("Error: No CPU or GPU devices specified.")
-        sys.exit(1)
-
-    if len(cpu_devices) > 0:
-        cpu_sockets = get_cpu_sockets_linux()
-        if cpu_sockets is None:
-            print("Error: Unable to retrieve CPU socket information.")
-            sys.exit(1)
-
-        for device in cpu_devices:
-            if not any(socket['socket_id'] == device['device_id'] for socket in cpu_sockets):
-                print(f"Error: CPU device {device['device_id']} not found.")
-                sys.exit(1)
-
-    if len(gpu_devices) > 0:
-        gpu_info = get_gpu_info()
-        if isinstance(gpu_info, str):
-            print(gpu_info)
-            sys.exit(1)
-        
-        for device in gpu_devices:
-            if not any(gpu['device_id'] == device['device_id'] for gpu in gpu_info):
-                print(f"Error: GPU device {device['device_id']} not found.")
-                sys.exit(1)
-
     from preprocessors.prep_timeline import preprocess_timeline
     from preprocessors.prep_dataset import preprocess_dataset
     from preprocessors.prep_model import preprocess_model
