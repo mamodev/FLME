@@ -2,6 +2,7 @@
 from typing import List, Dict, Any
 import torch
 from torch.utils.data import DataLoader
+from torch.nn import functional
 
 def chash(client):
     return f"{client[0]}_{client[1]}"
@@ -55,3 +56,57 @@ class MemoryDataLoader:
     def __len__(self):
         return len(self.partition_data)
 
+def get_dataset_loaders(train_dss, splt_per_partition, cpp) -> List[List[MemoryDataLoader]]:
+    train_loaders = [
+        [
+            MemoryDataLoader(
+                partition_ds.data, 
+                partition_ds.targets, 
+                batch_size=1024, 
+                shuffle=False,
+                n_partitions=splt_per_partition[pidx],
+                partition_idx=cidx
+            )
+            for cidx in range(cpp[pidx])
+        ]
+        for pidx, partition_ds in enumerate(train_dss)
+    ]
+
+    return train_loaders
+
+def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weight_decay):
+
+    net.load_state_dict(model)
+    
+    optimizer = torch.optim.SGD(net.parameters(),  
+                                lr=learning_rate,
+                                momentum=momentum,
+                                weight_decay=weight_decay)
+
+    meta = {
+        "momentum": momentum,
+        "learning_rate": learning_rate,
+        "local_epoch": ephocs,
+        "weight_decay": weight_decay,
+        "train_samples": len(train_loader),
+        "train_loss": [],
+    }
+    
+    assert len(train_loader) > 0, "Train loader is empty."
+    
+    net.train()
+    for e in range(ephocs):
+        train_loss = 0.0
+        for i, (data, target) in enumerate(train_loader):
+            optimizer.zero_grad()
+            output = net(data)
+            loss = functional.nll_loss(output, target)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * data.size(0)
+            
+            
+        train_loss /= len(train_loader)
+        meta["train_loss"].append(train_loss)
+
+    return meta, net.state_dict()

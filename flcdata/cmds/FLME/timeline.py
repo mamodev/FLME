@@ -8,16 +8,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
     
 # ===== END COMPATIBILITY CODE =====
-
 import json
 import math
 from typing import List, Tuple, Dict, Union, Any
 import time
 import threading
 import copy
-
-from timeline_parser import parse_sim_export, compute_partition_shards, SimExport, Timeline, Event, EventFetchModel, EventTrainModel, EventSendModel
-from timeline_utils import MemoryDataLoader, chash, deep_clone_sdict
 
 import torch
 import torch.nn.functional as functional
@@ -26,107 +22,35 @@ import torch.multiprocessing as mp
 import numpy as np
 from io import BytesIO
 
+from lib.flcdata import FLCDataset, Model
+
+from timeline_parser import parse_sim_export, compute_partition_shards, SimExport, Timeline, Event, EventFetchModel, EventTrainModel, EventSendModel
+from timeline_utils import MemoryDataLoader, chash, deep_clone_sdict, train_model, get_dataset_loaders
+from torch_mp import MasterSlaveCommunicator
 #=== END OF IMPORTS ====
 
-def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weight_decay):
-    import cmds.FLME.protocol.protocol as protocol
-
-    net.load_state_dict(model)
-    
-    optimizer = torch.optim.SGD(net.parameters(),  
-                                lr=learning_rate,
-                                momentum=momentum,
-                                weight_decay=weight_decay)
-
-    meta = {
-        "momentum": momentum,
-        "learning_rate": learning_rate,
-        "local_epoch": ephocs,
-        "weight_decay": weight_decay,
-        "train_samples": len(train_loader),
-        "train_loss": [],
-    }
-    
-    net.train()
-    for e in range(ephocs):
-        train_loss = 0.0
-        for i, (data, target) in enumerate(train_loader):
-            optimizer.zero_grad()
-            output = net(data)
-            loss = functional.nll_loss(output, target)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * data.size(0)
-        
-        train_loss /= len(train_loader)
-        meta["train_loss"].append(train_loss)
-
-    return meta, net.state_dict()
-
-def aggregate_model(_mdl, updates):
-    local_models = [
-        (upd, meta['train_samples'])
-        for meta, upd in updates
-    ]
-    
-    total_weight = sum([n for _, n in local_models])
-    keys = [k for k in local_models[0][0].keys()]
-    
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # for m, _ in local_models:
-    #     for k in keys:
-    #         m[k] = m[k].to(device)
-    
-    model = {k: sum([m[k] * n for m, n in local_models]) / total_weight for k in keys}
-    return model, {
-            "contributors": [
-                meta for meta, model in updates
-            ]
-        }
-
-def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, master_idx, masters_chs, in_ch, out_ch, device, ds_folder, splt_per_partition, cpp):
-    torch.cuda.set_device(device)
-    
-    from lib.flcdata import FLCDataset, Model
-    in_size, out_size = FLCDataset.LoadSize(ds_folder)
-    net = Model(insize=in_size, outsize=out_size)
-    net.to(device)
-
+def worker_get_loaders(worker_id, device_comm, device, ds_folder, splt_per_partition, cpp):
     if worker_id == 0:
         train_dss = FLCDataset.LoadGroups(ds_folder=ds_folder, train=True)
         train_dss = [ds.to(device) for ds in train_dss]
-        
-        device_barrier.wait()
-        for _ in range(device_workers - 1):
-            device_ch.put(train_dss)
-            
-        device_barrier.wait()
-            
-        out_ch.put("ready")
+        device_comm.send_broadcast(train_dss)
     else:
-        device_barrier.wait()
-        train_dss = device_ch.get() 
-        assert isinstance(train_dss, list), f"Expected list of datasets, got {type(train_dss)}"
-        assert all(isinstance(ds, FLCDataset) for ds in train_dss), "All datasets must be FLCDataset instances."
-        device_barrier.wait() 
+        train_dss = device_comm.recv_broadcast()
 
-    print(f"Worker on device {device} {worker_id} ready with {len(train_dss)} partitions.", flush=True)
+    return get_dataset_loaders(train_dss, splt_per_partition, cpp)
 
-    train_loaders = [
-        [
-            MemoryDataLoader(
-                partition_ds.data, 
-                partition_ds.targets, 
-                batch_size=1024, 
-                shuffle=False,
-                n_partitions=splt_per_partition[pidx],
-                partition_idx=cidx
-            )
-            for cidx in range(cpp[pidx])
-        ]
-        for pidx, partition_ds in enumerate(train_dss)
-    ]
+def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, device_ch, n_masters, master_idx, masters_chs, in_ch, out_ch, device, ds_folder, splt_per_partition, cpp):
+    IsMaster = worker_id == 0
+    torch.cuda.set_device(device)
     
+    in_size, out_size = FLCDataset.LoadSize(ds_folder)
+    net = Model(insize=in_size, outsize=out_size)
+    net.to(device)
+    
+    train_loaders = worker_get_loaders(worker_id, device_comm, device, ds_folder, splt_per_partition, cpp)
+    print(f"Worker on device {device} {worker_id} ready with {len(train_loaders)} partitions.", flush=True)
+    if IsMaster:
+        out_ch.put("ready") # This is to signal Scheduler process that this worker is ready. to start receiving events.
  
     gmodel_map = {}
     local_upds = []
@@ -141,35 +65,22 @@ def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, mast
         
         if event['type'] == 'aggregation':
             version = event['version']
-            
             if 'clean_up_models' in event and len(event['clean_up_models']) > 0:
                 for v in event['clean_up_models']:
                     if v in gmodel_map:
                         del gmodel_map[v]
             
             if version != 1:
-                if worker_id != 0:
-                    device_ch.put(None if len(local_upds) == 0 else (curr_local_model, local_upds))
-               
-                curr_local_model = None
-                local_upds = []
-                device_barrier.wait()
+                _data = None if len(local_upds) == 0 else (curr_local_model, local_upds)
+                if not IsMaster:
+                    device_comm.send_gather(_data)
+                else:
+                    DC_UPDATES = device_comm.recv_gather(with_my_data=_data)
+                del _data
                 
-                if worker_id == 0:
-                    DC_UPDATES = []
-                    for _ in range(device_workers - 1):
-                        upd = device_ch.get()
-                        if upd is not None:
-                            DC_UPDATES.append(upd)
-                            
-                    if len(local_upds) > 0:
-                        DC_UPDATES.append((curr_local_model, local_upds))
-                    
-                device_barrier.wait()
              
-            if worker_id == 0:
+            if IsMaster:
                 metas = []
-                device_barrier.wait()
                 if version == 1:
                     cpu_model = event['model']
                     model = {k: v.to(device) for k, v in cpu_model.items()}
@@ -193,27 +104,28 @@ def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, mast
                     CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None 
                     local_metas = [meta for _, meta in updates]
                     local_metas = [item for sublist in local_metas for item in sublist]  
-                    for midx, m_ch in enumerate(masters_chs):
-                        if midx != master_idx:
-                            m_ch.put(None if model is None else (CPU_MODEL, local_metas))
-                    del CPU_MODEL
+                    others = world_comm.f_all_to_all(master_idx, (CPU_MODEL, local_metas))
                     
-                    others=[]
-                    for _ in range(n_masters - 1):
-                        o = masters_chs[master_idx].get()
-                        if o is not None:
-                            others.append(o)
+                    # for midx, m_ch in enumerate(masters_chs):
+                    #     if midx != master_idx:
+                    #         m_ch.put(None if model is None else (CPU_MODEL, local_metas))
+                    # del CPU_MODEL
+                    
+                    # others=[]
+                    # for _ in range(n_masters - 1):
+                    #     o = masters_chs[master_idx].get()
+                    #     if o is not None:
+                    #         others.append(o)
                             
-                    others = [o for o in others if o is not None]
+                    # others = [o for o in others if o is not None]
                     metas = [o[1] for o in others] #this is a list of lists of contributors, we need to flatten it
                     metas = [item for sublist in metas for item in sublist]  # flatten the list of lists
-                    
                     others = [{k: v.to(device) for k, v in o[0].items()} for o in others]
                     
-                    if model is not None:
-                        others.append(model)  # add the current model to the list
-                        # metas.extend(local_metas)
-                        metas = metas + local_metas
+                    # if model is not None:
+                    #     others.append(model)  # add the current model to the list
+                    #     # metas.extend(local_metas)
+                    #     metas = metas + local_metas
                     
                     assert len(others) > 0, "No master had models to aggregate."
                     
@@ -221,23 +133,16 @@ def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, mast
                     final_weight = sum(weights)
                     model = {k: sum([o[k] * w for o, w in zip(others, weights)]) / final_weight for k in others[0].keys()}
 
-                for _ in range(device_workers - 1):
-                    device_ch.put((model, version))
-            
-                device_barrier.wait()
-            else:
-                device_barrier.wait()
-                model, version = device_ch.get()
-                device_barrier.wait()
+                device_comm.send_broadcast(model)
+                
+                if master_idx == 0:
+                    CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None
+                    out_ch.put((CPU_MODEL, {"contributors": metas}))
+                    del CPU_MODEL
 
-        
-            if master_idx == 0 and worker_id == 0:
-                CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None
-                out_ch.put((CPU_MODEL, {
-                    "contributors": metas,
-                }))
-                del CPU_MODEL   
-        
+            else:
+                model = device_comm.recv_broadcast()
+
             assert version not in gmodel_map, f"Model version {version} already exists."
             gmodel_map[version] = model
             continue
@@ -278,7 +183,6 @@ def worker(device_workers, worker_id, device_barrier, device_ch, n_masters, mast
                 curr_local_model[k] += upd[k] * meta['train_samples']
         
         local_upds.append(meta)
-
 
 def repo_thread(repo, model_queue):
     while True:
@@ -347,12 +251,16 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     device_barriers=        [ctx.Barrier(worker_per_device) for _ in range(n_devices)]
     device_inner_channel =  [ctx.Queue() for _ in range(n_devices)]
     masters_chs =           [ctx.Queue() for _ in range(n_devices)]
+    device_comms =          [MasterSlaveCommunicator(ctx, worker_per_device) for _ in range(n_devices)]
+    world_comm = MasterSlaveCommunicator(ctx, n_devices)
     
     processes = []
     for didx, device in enumerate(devices):
         
         for i in range(worker_per_device):
             args = (
+                device_comms[didx],
+                world_comm,
                 worker_per_device, 
                 i,
                 device_barriers[didx], 

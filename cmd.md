@@ -11,3 +11,6 @@ python remote.py upload tm-client.py flcdata/ all
 # upload new version
 
 python remote.py run "kill \$(pgrep -f client.py)" all; python remote.py run "rm flcdata/tm-client.py" all; python remote.py upload tm-client.py flcdata/ all   
+
+
+python3 cmds/FLME/timeline.py --timeline .timelines/sync.json --repo-folder=.simulations/prova --ds-folder=.splits/data/ --nuke-repo
