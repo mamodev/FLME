@@ -4,6 +4,7 @@
     "version": "0.0.0",
     "type": "module",
     "scripts": {
+        "only-frontend": "vite --host --config .uiconfig/vite.config.ts",
         "start": "concurrently \"vite --host --config .uiconfig/vite.config.ts\" \"python3 src/server.py\"",
         "runpreview": "concurrently \"vite preview --host --config .uiconfig/vite.config.ts\" \"python3 src/server.py\"",
         "dev": "vite --config .uiconfig/vite.config.ts",

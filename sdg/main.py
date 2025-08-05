@@ -1,6 +1,3 @@
-
-
-
 from flcdata import FLCDataset, SimpleBatchLoader, VerySimpleModel
 import torch
 from torch.nn import functional as F
