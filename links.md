@@ -4,7 +4,6 @@ https://arxiv.org/pdf/1902.00146
 !Troppo complicato... sembra interessante 
 spigato anche in https://arxiv.org/pdf/2002.10619 appendice B.2
 
-
 # clustering
 https://arxiv.org/pdf/2004.11791
 
@@ -15,6 +14,9 @@ https://arxiv.org/pdf/2102.02079
 types of non-iid
 https://arxiv.org/pdf/1912.04977, page 18
 
+
+asdasd
+asd
 
 # clustering in FL
 IFCA (Iterative Federated Cluster Algorithm)

@@ -1,37 +1,42 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query";
 
 // get current domain / ip address (Exclude port) and set as base url
-const domain = window.location.hostname.split(":")[0]
+
+const domain = "131.114.51.144";
+// const domain = window.location.hostname.split(":")[0]
 
 // export const baseUrl = "http://localhost:5555/api/"
-export const baseUrl = `http://${domain}:5555/api/`
-console.log("baseUrl", baseUrl)
+export const baseUrl = `http://${domain}:5555/api/`;
+console.log("baseUrl", baseUrl);
 
 export function apiurl(...paths: string[]): string {
-    return baseUrl + paths.join("/")
+  return baseUrl + paths.join("/");
 }
 
-export async function execPython(code: string, globals: Record<string, any> = {}): Promise<any> {
-    return await  fetch(apiurl("exec-python"), {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            code,
-            globals,
-        }),
-    }).then((response) => {
-        if (!response.ok) {
-            throw new Error("Network response was not ok")
-        }
-        return response.json()
-    })
+export async function execPython(
+  code: string,
+  globals: Record<string, any> = {}
+): Promise<any> {
+  return await fetch(apiurl("exec-python"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      code,
+      globals,
+    }),
+  }).then((response) => {
+    if (!response.ok) {
+      throw new Error("Network response was not ok");
+    }
+    return response.json();
+  });
 }
 
 export async function ls(path: string): Promise<string[]> {
-    const dir = await execPython(
-`
+  const dir = await execPython(
+    `
 import os
 
 #list all files in a directory and return as list of strings
@@ -48,29 +53,29 @@ def ls(path):
     return []
 
 response = ls(path)
-`
-, {
-        path,
-    })
+`,
+    {
+      path,
+    }
+  );
 
-    return dir.result as string[]
+  return dir.result as string[];
 }
 
 export function useLS(path: string) {
-    const res = useQuery({
-        queryKey: ["ls", path],
-        queryFn: () => ls(path),
-    }) 
+  const res = useQuery({
+    queryKey: ["ls", path],
+    queryFn: () => ls(path),
+  });
 
-    return {
-        ...res,
-        data: res.data ?? [],
-    }
+  return {
+    ...res,
+    data: res.data ?? [],
+  };
 }
 
-
 export async function read(path: string): Promise<string> {
-    const file = await execPython(
+  const file = await execPython(
     `
 import os
 # read a file and return as string
@@ -86,18 +91,18 @@ def read_file(path):
     raise FileNotFoundError(f"Path {path} not found")
 
 response = read_file(path)
-    `
-    , {
-        path,
-    })
+    `,
+    {
+      path,
+    }
+  );
 
-    return file.result as string
+  return file.result as string;
 }
 
-
 export async function write(path: string, content: string): Promise<void> {
-    await execPython(
-        `
+  await execPython(
+    `
 import os
 # write a file
 def write_file(path, content):
@@ -107,27 +112,29 @@ def write_file(path, content):
         f.write(content)
 response = write_file(path, content)
         `,
-        {
-            path,
-            content,
-        }
-    ).then(() => {
-        console.log("File written successfully")
+    {
+      path,
+      content,
     }
-    ).catch((err) => {
-        console.error("Error writing file", err)
-    }
-    )
+  )
+    .then(() => {
+      console.log("File written successfully");
+    })
+    .catch((err) => {
+      console.error("Error writing file", err);
+    });
 }
-
 
 export async function writeJson(path: string, content: any): Promise<void> {
-    return await write(path, JSON.stringify(content))
+  return await write(path, JSON.stringify(content));
 }
 
-export async function writeBase64(path: string, content: string): Promise<void> {
-    return await execPython(
-        `
+export async function writeBase64(
+  path: string,
+  content: string
+): Promise<void> {
+  return await execPython(
+    `
 import os
 import base64
 
@@ -139,18 +146,20 @@ def write_base64_file(path, content):
 
 response = write_base64_file(path, content)
         `,
-        {
-            path,
-            content,
-        }
-    )
-    
+    {
+      path,
+      content,
+    }
+  );
 }
 
-
-export async function updateAt(path: string, content: string, offset: number): Promise<void> {
-    await execPython(
-        `
+export async function updateAt(
+  path: string,
+  content: string,
+  offset: number
+): Promise<void> {
+  await execPython(
+    `
 import os
 # update a file at a given offset
 def update_file(path, content, offset):
@@ -165,11 +174,10 @@ def update_file(path, content, offset):
     raise FileNotFoundError(f"Path {path} not found")
 response = update_file(path, content, offset)
         `,
-        {
-            path,
-            content,
-            offset,
-        }
-    )
+    {
+      path,
+      content,
+      offset,
+    }
+  );
 }
-

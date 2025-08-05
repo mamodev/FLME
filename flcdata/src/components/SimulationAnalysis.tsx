@@ -16,18 +16,14 @@ import { ChevronLeft, Delete, Menu, ReplayOutlined } from "@mui/icons-material";
 import { SimulationMetric, useSimMetrics } from "../api/useSimMetrics";
 import { PlotRenderer } from "./PlotRenderer";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  createSlidingWindowTraces,
-} from "../utils/sliding_window_trace";
+import { createSlidingWindowTraces } from "../utils/sliding_window_trace";
 
 export function SimulationAnalysis() {
   const queryClient = useQueryClient();
 
   const { data: _slist, refetch } = useSimList();
   const slist = _slist || [];
-  slist.sort(
-    (a, b) => a.name.localeCompare(b.name)
-  )
+  slist.sort((a, b) => a.name.localeCompare(b.name));
 
   const [selectedSim, setSelectedSim] = React.useState<string | null>(null);
   const deleteSim = useDeleteSimulation();
@@ -35,7 +31,7 @@ export function SimulationAnalysis() {
   const [drawerOpen, setDrawerOpen] = React.useState(true);
 
   return (
-    <Stack p={2} direction="row" flex={1} sx={{overflow: "hidden"}}>
+    <Stack p={2} direction="row" flex={1} sx={{ overflow: "hidden" }}>
       {!drawerOpen && (
         <Stack
           alignItems="center"
@@ -60,8 +56,8 @@ export function SimulationAnalysis() {
             borderRadius: 1,
             boxShadow: 4,
             py: 2,
-            overflowY: 'auto',
-            overflowX: 'hidden'
+            overflowY: "auto",
+            overflowX: "hidden",
           }}
         >
           <Stack
@@ -90,35 +86,35 @@ export function SimulationAnalysis() {
               <ReplayOutlined />
             </IconButton>
           </Stack>
-          <List  dense sx={{overflow: 'auto'}}>
+          <List dense sx={{ overflow: "auto" }}>
             {slist.map((sim, index) => (
-                <ListItemButton
-                  key={index}
-                  onClick={() => setSelectedSim(sim.name)}
-                  selected={selectedSim === sim.name}
-                >
-                  <IconButton
-                    onClick={() => {
-                      if (
-                        confirm(
-                          "Are you sure you want to delete this simulation?"
-                        )
-                      ) {
-                        if (selectedSim === sim.name) {
-                          setSelectedSim(null);
-                        }
-
-                        deleteSim.mutate(sim.name);
+              <ListItemButton
+                key={index}
+                onClick={() => setSelectedSim(sim.name)}
+                selected={selectedSim === sim.name}
+              >
+                <IconButton
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Are you sure you want to delete this simulation?"
+                      )
+                    ) {
+                      if (selectedSim === sim.name) {
+                        setSelectedSim(null);
                       }
-                    }}
-                  >
-                    <Delete />
-                  </IconButton>
-                  <ListItemText
-                    primary={sim.name}
-                    secondary={`${sim.metrics_files} / ${sim.model_files}`}
-                  />
-                </ListItemButton>
+
+                      deleteSim.mutate(sim.name);
+                    }
+                  }}
+                >
+                  <Delete />
+                </IconButton>
+                <ListItemText
+                  primary={sim.name}
+                  secondary={`${sim.metrics_files} / ${sim.model_files}`}
+                />
+              </ListItemButton>
             ))}
           </List>
         </Stack>
@@ -151,91 +147,84 @@ function Simulation({ name }: { name: string }) {
     null
   );
 
-  const metrics = _metrics || [
-    {
-      version: 0,
-      accuracy: 0,
-      groups: {} as Record<string, number>,
-    },
-  ];
+  const metrics = React.useMemo(() => {
+    console.log("Metrics:", _metrics);
+    if (!_metrics) {
+      return [
+        {
+          version: 0,
+          accuracy: 0,
+          groups: {} as Record<string, number>,
+        },
+      ];
+    }
+
+    return _metrics;
+  }, [_metrics]);
 
   const groups = React.useMemo(() => {
     return Object.keys(metrics[0].groups);
   }, [metrics]);
 
-  // const avg = React.useMemo(() => {
-  //   const avg = Array.from({ length: metrics.length }, () => 0);
-
-  //   for (let i = 0; i < metrics.length; i++) {
-  //     const m = metrics[i];
-  //     const sum = Object.values(m.groups).reduce((a, b) => a + b, 0);
-  //     avg[i] = sum / groups.length;
-  //   }
-
-  //   return avg;
-  // }, [metrics]);
-
-
-
-
   const data = React.useMemo(() => {
-    return metrics.length == 1 ? [] : [
-      ...createSlidingWindowTraces({
-        label: "Accuracy",
-        x: metrics.map((m) => m.version),
-        y: metrics.map((m) => groups.map((g) => m.groups[g])),
-        windowSize: 40,
-        bandFillColor: "rgba(200,50,50,0.3)",
-      }),
-      // {
-      //   x: metrics.map((m) => m.version),
-      //   y: metrics.map((m) => m.accuracy),
-      //   type: "scatter",
-      //   mode: "lines+markers",
-      //   name: "Accuracy",
-      //   marker: { color: "blue" },
-      // },
-      ...groups.map((group) => ({
-        x: metrics.map((m) => m.version),
-        y: metrics.map((m) => m.groups[group]),
-        type: "scatter",
-        // mode: "lines+markers",
-        visible: "legendonly",
+    return metrics.length == 1
+      ? []
+      : [
+          //   ...createSlidingWindowTraces({
+          //     label: "Accuracy",
+          //     x: metrics.map((m) => m.version),
+          //     y: metrics.map((m) => groups.map((g) => m.groups[g])),
+          //     windowSize: 40,
+          //     bandFillColor: "rgba(200,50,50,0.3)",
+          //   }),
+          {
+            x: metrics.map((m) => m.version),
+            y: metrics.map((m) => m.accuracy),
+            type: "scatter",
+            mode: "lines+markers",
+            name: "Accuracy",
+            marker: { color: "blue" },
+          },
+          ...groups.map((group) => ({
+            x: metrics.map((m) => m.version),
+            y: metrics.map((m) => m.groups[group]),
+            type: "scatter",
+            // mode: "lines+markers",
+            visible: "legendonly",
 
-        opacity: 0.5,
-        name: group,
-      })),
-      // {
-      //   x: metrics.map((m) => m.version),
-      //   y: avg,
-      //   type: "scatter",
-      //   mode: "lines",
-      //   name: "Average",
-      //   marker: { color: "red" },
-      // }
-    ]
-  }, [_metrics]);
+            opacity: 0.5,
+            name: group,
+          })),
+          // {
+          //   x: metrics.map((m) => m.version),
+          //   y: avg,
+          //   type: "scatter",
+          //   mode: "lines",
+          //   name: "Average",
+          //   marker: { color: "red" },
+          // }
+        ];
+  }, [groups, metrics]);
 
   const layout = React.useMemo(() => {
     return {
-        title: {
-          text: `Simulation ${name.replaceAll("_", " ").replaceAll("-", " ")}`,
-          font: {
-            size: 20,
-          },
+      title: {
+        text: `Simulation ${name.replaceAll("_", " ").replaceAll("-", " ")}`,
+        font: {
+          size: 20,
         },
-        showlegend: true,
-        yaxis: {
-          range: [0, 1],
-          title: "Accuracy",
-        },
-        xaxis: {
-          title: "Model version",
-        },
-      }}, [name]);
+      },
+      showlegend: true,
+      yaxis: {
+        range: [0, 1],
+        title: "Accuracy",
+      },
+      xaxis: {
+        title: "Model version",
+      },
+    };
+  }, [name]);
 
-
-    
   const handlePointClick = React.useCallback(
     (point: any, trace: any) => {
       setSelectedMetric(point);
@@ -243,13 +232,11 @@ function Simulation({ name }: { name: string }) {
     [setSelectedMetric]
   );
 
-
-
-  if (!_metrics) {
+  if (!metrics) {
     return <Typography variant="body1">Loading...</Typography>;
   }
 
-
+  console.log("Metrics:", metrics);
 
   return (
     <>
@@ -269,7 +256,6 @@ function Simulation({ name }: { name: string }) {
           <DetailsDialog
             metric={metrics[selectedMetric] as unknown as SimulationMetric}
           />
-        
         )}
       </Dialog>
     </>
@@ -278,8 +264,7 @@ function Simulation({ name }: { name: string }) {
 
 type DetailsDialogProps = {
   metric: SimulationMetric;
-
-}
+};
 function DetailsDialog(props: DetailsDialogProps) {
   const { metric } = props;
 
@@ -296,25 +281,25 @@ function DetailsDialog(props: DetailsDialogProps) {
     return aNum - bNum;
   });
 
-
   const gvalues = groups.map((g) => metric.groups[g]);
 
-  return   <>
-    <DialogTitle>
-      Model version {metric.version} - {" "}
-      {metric.accuracy}
-    </DialogTitle>
+  return (
+    <>
+      <DialogTitle>
+        Model version {metric.version} - {metric.accuracy}
+      </DialogTitle>
 
-    {/* PLOT HIST OF ACC PER GROUP */}
-    <PlotRenderer
-      data={[
-        {
-          x: groups,
-          y: gvalues,
-          type: "bar",
-          name: "Groups",
-        },
-      ]}
-    />
-  </>
+      {/* PLOT HIST OF ACC PER GROUP */}
+      <PlotRenderer
+        data={[
+          {
+            x: groups,
+            y: gvalues,
+            type: "bar",
+            name: "Groups",
+          },
+        ]}
+      />
+    </>
+  );
 }
