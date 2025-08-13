@@ -1,16 +1,26 @@
 import math
 import time
+import os
+import logging
+from threading import Thread
+from queue import Queue
 
 import torch
 import torch.multiprocessing as mp
 
+# Local imports
 from torch_mp import MasterSlaveCommunicator
-from timeline_parser import parse_sim_export, compute_partition_shards
+from timeline_parser import parse_sim_export, compute_partition_shards, max_timeline_concurrency
 from timeline_utils import  chash, train_model, get_dataset_loaders
-
-from lib.flcdata import FLCDataset, Model
+# from flcdata import FLCDataset, Model
+from flcdata import FLCDataset
+from nets import MODELS
+from repository import ModelRepository
 
 #=== END OF IMPORTS ====
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("timeline.py")
 
 def worker_get_loaders(worker_id, device_comm, device, ds_folder, splt_per_partition, cpp):
     if worker_id == 0:
@@ -22,8 +32,9 @@ def worker_get_loaders(worker_id, device_comm, device, ds_folder, splt_per_parti
 
     return get_dataset_loaders(train_dss, splt_per_partition, cpp)
 
-def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, device_ch, n_masters, master_idx, masters_chs, in_ch, out_ch, device, ds_folder, splt_per_partition, cpp):
+def worker(Model, device, world_comm, device_comm, device_id, worker_id, in_ch, out_ch, dataset_specs):
     IsMaster = worker_id == 0
+    ds_folder, splt_per_partition, cpp = dataset_specs
     torch.cuda.set_device(device)
     
     in_size, out_size = FLCDataset.LoadSize(ds_folder)
@@ -58,9 +69,8 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
                 if not IsMaster:
                     device_comm.send_gather(_data)
                 else:
-                    DC_UPDATES = device_comm.recv_gather(with_my_data=_data)
+                    DC_UPDATES = device_comm.recv_fgather(with_my_data=_data)
                 del _data
-                
              
             if IsMaster:
                 metas = []
@@ -72,35 +82,24 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
                             
                     if len(updates) == 0:
                         model = None
-                        total_weight = 0
+                        others = world_comm.f_all_to_all(device_id, None)
                     else:
-                        assert isinstance(updates, list), f"Updates must be a list, got {type(updates)}"
-                        assert all(isinstance(u, tuple) and len(u) == 2 for u in updates), f"Each update must be a tuple of (model, weight), got {[type(u) for u in updates]}"
-                        assert all(isinstance(u[0], dict) for u in updates), f"Each model in updates must be a dictionary, got {[type(u[0]) for u in updates]}"
-                        assert all(isinstance(u[1], list) and len(u[1]) > 0 for u in updates), f"Each update must have a non-empty list of contributors, got {[len(u[1]) for u in updates]}"
-                        
-                        UPD = [(model, sum([u['train_samples'] for u in metas])) for model, metas in updates]
-                        total_weight = sum([n for _, n in UPD])
-                        model = {k: sum([model[k] * n for model, n in UPD]) / total_weight for k in UPD[0][0].keys()}
-                    
-                    
-                    CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None 
-                    local_metas = [meta for _, meta in updates]
-                    local_metas = [item for sublist in local_metas for item in sublist]  
-                    others = world_comm.f_all_to_all(master_idx, (CPU_MODEL, local_metas))
-                    
+                        CPU_MODEL = {k: sum(model[k] for model, _ in updates).cpu() for k in updates[0][0].keys()}
+                        local_metas = [meta for _, meta in updates]
+                        local_metas = [item for sublist in local_metas for item in sublist]
+                        others = world_comm.f_all_to_all(device_id, (CPU_MODEL, local_metas))
+                        del CPU_MODEL
+                   
+                    assert len(others) > 0, "No master had models to aggregate."
                     metas = [o[1] for o in others] #this is a list of lists of contributors, we need to flatten it
                     metas = [item for sublist in metas for item in sublist]  # flatten the list of lists
+                    final_weight = sum([m['train_samples'] for m in metas])
                     others = [{k: v.to(device) for k, v in o[0].items()} for o in others]
-                    assert len(others) > 0, "No master had models to aggregate."
-                    
-                    weights = [m['train_samples'] for m in metas]
-                    final_weight = sum(weights)
-                    model = {k: sum([o[k] * w for o, w in zip(others, weights)]) / final_weight for k in others[0].keys()}
+                    model = {k: sum(m[k] for m in others) / final_weight for k in others[0].keys()}
 
                 device_comm.send_broadcast(model)
                 
-                if master_idx == 0:
+                if device_id == 0: # save it 
                     CPU_MODEL = {k: v.cpu() for k, v in model.items()} if model is not None else None
                     out_ch.put((CPU_MODEL, {"contributors": metas}))
                     del CPU_MODEL
@@ -110,6 +109,8 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
 
             assert version not in gmodel_map, f"Model version {version} already exists."
             gmodel_map[version] = model
+            local_upds.clear()
+            curr_local_model = None
             continue
                 
 
@@ -127,6 +128,7 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
         lr = hyperparams['optimizer']['learning_rate']
         momentum = hyperparams['optimizer'].get('momentum', 0.0)
         weight_decay = hyperparams['optimizer'].get('weight_decay', 0.0)
+        mu = hyperparams.get('mu', 0.0)
 
         loader.set_batch_size(bs)
         
@@ -135,7 +137,7 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
         
         # Copy the model (which is a state_dict and already on the device). copy it doing an indevice copy (no cpu transfer)
         model = {k: v.clone() for k, v in model.items()}
-        meta, upd = train_model(net, model, loader, learning_rate=lr, ephocs=ephocs, momentum=momentum, weight_decay=weight_decay)
+        meta, upd = train_model(net, model, loader, learning_rate=lr, epochs=ephocs, momentum=momentum, weight_decay=weight_decay, mu=mu)
         
         meta['base_version'] = version
         meta['client'] = event['client']
@@ -157,94 +159,34 @@ def repo_thread(repo, model_queue):
 
         repo.put_model(*model)
 
-def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
-    assert len(aggregations) > 0, "At least one aggregation is required."
-    assert len(timeline) > 0, "Timeline must contain at least one time step."
-    assert len(sim["client_per_partition"]) == sim["npartitions"], "Number of partitions does not match number of client partitions."
-    
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__file__)
-    
-    from lib.flcdata import FLCDataset, Model
-  
-    
-    logger.info("Loading datasets...")
-    in_size, out_size = FLCDataset.LoadSize(ds_folder)
-    splt_per_partition = compute_partition_shards(sim["client_per_partition"], sim.get("proportionalKnowledge", False))
-    logger.info(f"Input size: {in_size}, Output size: {out_size}")
-    logger.info(f"Timeline length: {len(timeline)}")
-    logger.info(f"Aggregations: {len(aggregations)}")
-    
-
-    # Calculate max teorethical concurrency
-    max_concurrency = 6
-    curr_max = 0
-    agg_indx = 0
-    for t, events in enumerate(timeline):
-        for event in events:
-            if event['type'] == 'send':
-                curr_max += 1
-        
-        if t >= aggregations[agg_indx]:
-            agg_indx += 1
-            if curr_max > max_concurrency:
-                max_concurrency = curr_max
-            curr_max = 0
-            
-            if agg_indx >= len(aggregations):
-                break
-    
-    logger.info(f"Max concurrency: {max_concurrency}")
-    
-    # check how many cuda devices are available
-    n_devices = torch.cuda.device_count()
-    max_worker_per_device = 4
-    # worker_per_device = min(max_worker_per_device, max(1 math.ceil(max_concurrency / n_devices)))
-    worker_per_device = min(max_worker_per_device, max(1, math.ceil(max_concurrency / n_devices)))
-    
-    
-    
-    devices = [torch.device(f"cuda:{i}") for i in range(n_devices)]
-    assert n_devices > 0, "No CUDA devices available."
-    logger.info(f"Number of CUDA devices: {n_devices}")
-    logger.info(f"Worker per device: {worker_per_device}")
-    
+def start_workers(Model, devices, worker_per_device, dataset_specs):
+    n_devices = len(devices)
     ctx = mp.get_context('spawn')
     job_queue = ctx.Queue()
     result_queue = ctx.Queue()
-    device_barriers=        [ctx.Barrier(worker_per_device) for _ in range(n_devices)]
-    device_inner_channel =  [ctx.Queue() for _ in range(n_devices)]
-    masters_chs =           [ctx.Queue() for _ in range(n_devices)]
     device_comms =          [MasterSlaveCommunicator(ctx, worker_per_device) for _ in range(n_devices)]
     world_comm = MasterSlaveCommunicator(ctx, n_devices)
-    
     processes = []
-    for didx, device in enumerate(devices):
-        
-        for i in range(worker_per_device):
+    for device_id, device in enumerate(devices):
+        for worker_id in range(worker_per_device):
+            
             args = (
-                device_comms[didx],
+                Model,
+                device, 
                 world_comm,
-                worker_per_device, 
-                i,
-                device_barriers[didx], 
-                device_inner_channel[didx],
-                n_devices,
-                didx,
-                masters_chs,
+                device_comms[device_id],
+                device_id,
+                worker_id,
                 job_queue, 
                 result_queue, 
-                device, 
-                ds_folder,
-                splt_per_partition, 
-                sim["client_per_partition"],
+                dataset_specs
             )
             
             p = ctx.Process(target=worker, args=args)
             p.start()
             processes.append(p)
-            
+
+
     logger.info(f"Started {len(processes)} worker processes.")
     
     # get ack from masters
@@ -252,17 +194,43 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
         _ = result_queue.get()
         
     logger.info("Workers initialized and ready.")
+    
+    return job_queue, result_queue, processes
 
-    # time.sleep(10000)
-    tm_last_agg = time.perf_counter()
+def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
+    assert len(aggregations) > 0, "At least one aggregation is required."
+    assert len(timeline) > 0, "Timeline must contain at least one time step."
+    assert len(sim["client_per_partition"]) == sim["npartitions"], "Number of partitions does not match number of client partitions."
+ 
+    n_devices = args.ncuda_devices
+    max_worker_per_device = args.worker_per_device
+    assert n_devices >= 1, "At least one CUDA device is required."
+    assert max_worker_per_device >= 1, "At least one worker per device is required."
     
+    max_concurrency = max_timeline_concurrency(timeline, aggregations)
+    worker_per_device = min(max_worker_per_device, max(1, math.ceil(max_concurrency / n_devices)))
+    devices = [torch.device(f"cuda:{i}") for i in range(n_devices)]
+    assert n_devices > 0, "No CUDA devices available."
+   
+    logger.info(f"Timeline length: {len(timeline)}")
+    logger.info(f"Aggregations: {len(aggregations)}")
+    logger.info(f"Max concurrency: {max_concurrency}")
+    logger.info(f"Number of CUDA devices: {n_devices}")
+    logger.info(f"Worker per device: {worker_per_device}")
+        
+    logger.info("Loading datasets...")
+    in_size, out_size = FLCDataset.LoadSize(ds_folder)
+    splt_per_partition = compute_partition_shards(sim["client_per_partition"], sim.get("proportionalKnowledge", False))
+    logger.info(f"Input size: {in_size}, Output size: {out_size}")
+  
     
-    base_model = Model(insize=in_size, outsize=out_size).state_dict()
+    dataset_specs = ( ds_folder,  splt_per_partition, sim["client_per_partition"] )
+    job_queue, result_queue, processes = start_workers(MODELS[args.net], devices, worker_per_device, dataset_specs)
+
+
+    base_model = MODELS[args.net](insize=in_size, outsize=out_size).state_dict()
     
     # spawn a thread to handle repository updates (normal python thread )
-    from threading import Thread
-    from queue import Queue
-    from cmds.FLME.core.repository import ModelRepository
     repo_model_queue = Queue()
     repo = ModelRepository.from_disk(repo_folder, ignore_exists=False, window_size=2)
     repo_thread_instance = Thread(target=repo_thread, args=(repo, repo_model_queue), daemon=True)
@@ -272,8 +240,6 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     repo_model_queue.put((base_model, {
         "contributors": [],
     }))
-        
-
     
     for _ in range(n_devices * worker_per_device):
         job_queue.put({
@@ -283,18 +249,15 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
         })
         
     del base_model  
-        
     _ = result_queue.get()
 
     logger.info("Base model pushed to repository and workers notified.")
     
-    time.sleep(1)
-    
     sparse_client_model_map = {}
     global_model_map = { 1: 0 }
-    
     latest_model_version = 1
     pending_jobs = 0
+    tm_last_agg = time.perf_counter()
     next_agg = aggregations[0]
     for t, events in enumerate(timeline):
         for event in events:
@@ -313,8 +276,6 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
                 
                 del sparse_client_model_map[ckey]
                 global_model_map[version] -= 1
-                # if global_model_map[version]['ref-count'] == 0 and version != latest_model_version:
-                #     del global_model_map[version]
                 event['version'] = version
                 job_queue.put(event)
                 pending_jobs += 1
@@ -366,7 +327,6 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
     for p in processes:
         p.join()
         
-        # join repo thread
     repo_model_queue.put(None)
     repo_thread_instance.join()
     
@@ -375,11 +335,17 @@ def run_simulation(sim, timeline, aggregations, ds_folder, repo_folder, args):
 if __name__ == "__main__":
     import argparse
 
+    models_options = list(MODELS.keys())
+
     parser = argparse.ArgumentParser(description="Run simulation")
+
+    parser.add_argument("--net", type=str, choices=models_options, required=True, help="Network architecture to use")
     parser.add_argument("--timeline", type=str, required=True, help="Path to the JSON file")
     parser.add_argument("--ds-folder", type=str, required=True, help="Path to the dataset folder")
     parser.add_argument("--repo-folder", type=str, required=True, help="Path to the model repository folder")
     parser.add_argument("--nuke-repo", action="store_true", help="Delete the model repository before starting")
+    parser.add_argument("--ncuda-devices", type=int, default=torch.cuda.device_count(), help="Number of CUDA devices to use")
+    parser.add_argument("--worker-per-device", type=int, default=1, help="Max number of worker per device (trimmed if there if timeline cannot be run with such concurrency)")
     
     args = parser.parse_args()
 
@@ -398,6 +364,9 @@ if __name__ == "__main__":
         run_simulation(sim, timeline, aggregations, args.ds_folder, args.repo_folder, args)
 
     except (FileNotFoundError, ValueError) as e:
+        # print pwd
+        print(f"pwd: {os.getcwd()}")
         print(f"MAIN: Error: {e}")
         import traceback
         traceback.print_exc()
+        exit(1)

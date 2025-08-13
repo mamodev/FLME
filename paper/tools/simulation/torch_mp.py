@@ -32,26 +32,24 @@ class MasterSlaveCommunicator:
         self.barrier.wait()
         return res
     
+    def recv_fgather(self, with_my_data=None):
+        res = self.recv_gather(with_my_data)
+        return [r for r in res if r is not None]
+    
     def all_to_all(self, idx, item):
         results = [item]
-        for i in range(self.n):
-            if i == idx:
-                res=self.recv_broadcast()
-                results.append(res)
-            else:
-                self.send_broadcast(item)
-                
+        if (self.n > 1):
+            for i in range(self.n):
+                if i == idx:
+                    res=self.recv_broadcast()
+                    results.append(res)
+                else:
+                    self.send_broadcast(item)
+
         return results
     
     def f_all_to_all(self, idx, item):
-        results = [item]
-        for i in range(self.n):
-            if i == idx:
-                res = self.recv_gather()
-                results.append(res)
-            else:
-                self.send_gather(item)
-
+        results = self.all_to_all(idx, item)
         return [r for r in results if r is not None]
 
 

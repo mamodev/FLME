@@ -96,7 +96,8 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
                         assert all(isinstance(u[0], dict) for u in updates), f"Each model in updates must be a dictionary, got {[type(u[0]) for u in updates]}"
                         assert all(isinstance(u[1], list) and len(u[1]) > 0 for u in updates), f"Each update must have a non-empty list of contributors, got {[len(u[1]) for u in updates]}"
                         
-                        UPD = [(model, sum([u['train_samples'] for u in metas])) for model, metas in updates]
+                        # UPD = [(model, sum([u['train_samples'] for u in metas])) for model, metas in updates]
+                        UPD = [(model, len(metas)) for model, metas in updates]
                         total_weight = sum([n for _, n in UPD])
                         model = {k: sum([model[k] * n for model, n in UPD]) / total_weight for k in UPD[0][0].keys()}
                     
@@ -129,9 +130,11 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
                     
                     assert len(others) > 0, "No master had models to aggregate."
                     
-                    weights = [m['train_samples'] for m in metas]
-                    final_weight = sum(weights)
-                    model = {k: sum([o[k] * w for o, w in zip(others, weights)]) / final_weight for k in others[0].keys()}
+                    # weights = [m['train_samples'] for m in metas]
+                    # final_weight = sum(weights)
+                    # model = {k: sum([o[k] * w for o, w in zip(others, weights)]) / final_weight for k in others[0].keys()}
+                    model = {k: sum([o[k] for o in others]) / len(metas) for k in others[0].keys()}
+
 
                 device_comm.send_broadcast(model)
                 
@@ -180,8 +183,9 @@ def worker(device_comm, world_comm, device_workers, worker_id, device_barrier, d
             curr_local_model = {k: v * meta['train_samples'] for k, v in upd.items()}
         else:
             for k in curr_local_model.keys():
-                curr_local_model[k] += upd[k] * meta['train_samples']
-        
+                # curr_local_model[k] += upd[k] * meta['train_samples']
+                curr_local_model[k] += upd[k]
+                
         local_upds.append(meta)
 
 def repo_thread(repo, model_queue):
