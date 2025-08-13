@@ -14,3 +14,6 @@ python remote.py run "kill \$(pgrep -f client.py)" all; python remote.py run "rm
 
 
 python3 cmds/FLME/timeline.py --timeline .timelines/sync.json --repo-folder=.simulations/prova --ds-folder=.splits/data/ --nuke-repo
+
+
+python3 tools/simulation/timeline.py --timeline sync.json  --ds-folder=data/a1812-06127_synth_00 --repo-folder=prova --nuke-repo

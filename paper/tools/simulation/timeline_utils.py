@@ -1,6 +1,6 @@
 
 import torch
-from torch.nn import functional
+import torch.nn.functional as F
 from typing import List
 
 def chash(client):
@@ -56,6 +56,9 @@ class MemoryDataLoader:
         return len(self.partition_data)
 
 def get_dataset_loaders(train_dss, splt_per_partition, cpp) -> List[List[MemoryDataLoader]]:
+    assert len(train_dss) == len(splt_per_partition), f"Mismatch between datasets and splits per partition. {len(train_dss)=} != {len(splt_per_partition)=}"
+    assert len(train_dss) == len(cpp), f"Mismatch between datasets and clients per partition. {len(train_dss)=} != {len(cpp)=}"
+    
     train_loaders = [
         [
             MemoryDataLoader(
@@ -73,38 +76,53 @@ def get_dataset_loaders(train_dss, splt_per_partition, cpp) -> List[List[MemoryD
 
     return train_loaders
 
-def train_model(net, model, train_loader, learning_rate, ephocs, momentum, weight_decay):
+def train_model(net, model_params, train_loader, learning_rate, epochs, momentum, weight_decay, mu):
+    net.load_state_dict(model_params)
 
-    net.load_state_dict(model)
-    
-    optimizer = torch.optim.SGD(net.parameters(),  
-                                lr=learning_rate,
-                                momentum=momentum,
-                                weight_decay=weight_decay)
+    global_params_vector = {
+        name: param.clone().detach()
+        for name, param in net.state_dict().items()
+    }
+
+    optimizer = torch.optim.SGD(
+        net.parameters(),
+        lr=learning_rate,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
 
     meta = {
         "momentum": momentum,
         "learning_rate": learning_rate,
-        "local_epoch": ephocs,
+        "local_epoch": epochs,
         "weight_decay": weight_decay,
         "train_samples": len(train_loader),
+        "mu": mu,
         "train_loss": [],
     }
-    
+
     assert len(train_loader) > 0, "Train loader is empty."
-    
+
     net.train()
-    for e in range(ephocs):
+    for e in range(epochs):
         train_loss = 0.0
-        for i, (data, target) in enumerate(train_loader):
+        for data, target in train_loader:
             optimizer.zero_grad()
             output = net(data)
-            loss = functional.nll_loss(output, target)
+            loss = F.nll_loss(output, target)
+
+            # FedProx proximal term
+            if mu > 0:
+                prox_term = 0.0
+                for name, param in net.named_parameters():
+                    prox_term += ((param - global_params_vector[name]) ** 2).sum()
+                loss += (mu / 2) * prox_term
+
             loss.backward()
             optimizer.step()
+
             train_loss += loss.item() * data.size(0)
-            
-            
+
         train_loss /= len(train_loader)
         meta["train_loss"].append(train_loss)
 

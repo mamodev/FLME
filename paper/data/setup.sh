@@ -80,8 +80,8 @@ if [ ! -d "$SCRIPT_DIR/a1812-06127_mnist" ]; then
     cd "$SCRIPT_DIR"
     echo "Dataset a1812-06127_mnist has been set up."
 
-    output  FOLDER/data/test/<some_unkown_name>.json => FOLDER/test.npz
-    output  FOLDER/data/train/<some_unkown_name>.json => FOLDER/train.npz
+    # output  FOLDER/data/test/<some_unkown_name>.json => FOLDER/test.npz
+    # output  FOLDER/data/train/<some_unkown_name>.json => FOLDER/train.npz
     test_json=$(find "$SCRIPT_DIR/a1812-06127_mnist/data/test" -name "*.json" | head -n 1)
     train_json=$(find "$SCRIPT_DIR/a1812-06127_mnist/data/train" -name "*.json" | head -n 1)
     if [ -z "$test_json" ] || [ -z "$train_json" ]; then

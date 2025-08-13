@@ -91,3 +91,24 @@ def compute_partition_shards(client_per_partition: List[int], proportional_knowl
         for pidx, nclients in enumerate(client_per_partition):
             splt_per_partition[pidx] = max_client_pp
     return splt_per_partition
+
+
+def max_timeline_concurrency(timeline: Timeline, aggregations: List[int]) -> int:
+    max_concurrency = 1
+    curr_max = 0
+    agg_indx = 0
+    for t, events in enumerate(timeline):
+        for event in events:
+            if event['type'] == 'send':
+                curr_max += 1
+        
+        if t >= aggregations[agg_indx]:
+            agg_indx += 1
+            if curr_max > max_concurrency:
+                max_concurrency = curr_max
+            curr_max = 0
+            
+            if agg_indx >= len(aggregations):
+                break
+
+    return max_concurrency
