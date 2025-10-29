@@ -9,12 +9,15 @@ def set_save_folder(folder):
     SAVE_FOLDER = folder
     
 
-def save_exp(exp, path):
+def save_exp(exp, path = None):
     global SAVE_FOLDER
     import json
-    path = os.path.join(SAVE_FOLDER, path)
-    with open(path, 'w') as f:
+    
+    p = os.path.join(SAVE_FOLDER, path)
+    with open(p, 'w') as f:
         json.dump(exp, f)
+
+    return path
     
 def uniform_cpp(partitions, cpp):
     return [cpp] * partitions
@@ -79,21 +82,21 @@ def random_straggler_filt_fact(nclients, min_drp_prc=0, max_drp_prc=1):
 
     return filter
 
-def fedprox_timeline(part=30, drp=0, lr=0.01, seed=42, cpa=10, mu=0, allow_partial_part=False):
+def fedprox_timeline(part=30, drp=0, lr=0.01, seed=42, cpa=10, mu=0, allow_partial_part=False, naggregations=200, epochs=20, batch_size=10):
     np.random.seed(seed)
 
     sim = {
         'npartitions': part,
-        'naggregations': 200,
+        'naggregations': naggregations,
         'client_per_partition': uniform_cpp(part, 1),
         'proportionalKnowledge': False
     }
 
     tparams = {
-        'ephocs': 20,
+        'ephocs': epochs,
         'batch_size': 10,
         'mu': mu,
-        'optimizer': {
+        'optimizer': {  
             'type': 'sgd',
             'momentum': 0,
             'learning_rate': lr,
@@ -109,8 +112,9 @@ def fedprox_timeline(part=30, drp=0, lr=0.01, seed=42, cpa=10, mu=0, allow_parti
         )
     
     np.random.seed(seed)
-    # spread tparams 
     add_constant_training_params(timeline, tparams, lambda: { **tparams,  "ephocs": np.random.randint(1, tparams['ephocs'] + 1) })
+
+    # add_constant_training_params(timeline, tparams)
 
     return {
         'timeline': timeline,
